@@ -58,7 +58,18 @@ def sync_to_notion(video: Video, result: AnalysisResult) -> int:
                     short_id=row["id"], start=row["start_time"],
                 )
                 continue
-            page_id = notion_create_page(video, moment)
+            # 노션 push 시점에 short internal_id 부여 (없으면) — 영빈이 노션에서
+            # 모먼트별 구분 가능하도록 (예: 26-P004-S01).
+            short_iid = row["internal_id"]
+            if not short_iid and video.internal_id:
+                short_iid = _next_short_internal_id(
+                    conn, video.internal_id, video.id,
+                )
+                conn.execute(
+                    "UPDATE shorts SET internal_id = ? WHERE id = ?",
+                    (short_iid, row["id"]),
+                )
+            page_id = notion_create_page(video, moment, short_iid)
             from datetime import UTC, datetime
             conn.execute(
                 "UPDATE shorts SET notion_page_id = ?, status = 'proposed', "
@@ -85,7 +96,7 @@ def poll_status_from_notion() -> dict[str, int]:
     counts = {
         "approved": 0, "rejected": 0,
         "scheduled_synced": 0, "scene_overridden": 0,
-        "time_overridden": 0,
+        "time_overridden": 0, "copy_overridden": 0,
     }
     conn = get_connection()
     try:
@@ -95,7 +106,7 @@ def poll_status_from_notion() -> dict[str, int]:
             for p in pages:
                 row = conn.execute(
                     "SELECT id, status, scheduled_at, scene_type, "
-                    "       start_time, end_time "
+                    "       start_time, end_time, copy1, copy2 "
                     "FROM shorts WHERE notion_page_id = ?",
                     (p["id"],),
                 ).fetchone()
@@ -105,6 +116,8 @@ def poll_status_from_notion() -> dict[str, int]:
                 new_scene = p["scene_type"]
                 new_start = p.get("start_sec")
                 new_end = p.get("end_sec")
+                new_copy1 = p.get("copy1")
+                new_copy2 = p.get("copy2")
                 if row["status"] != status_en and status_en in {"approved", "rejected"}:
                     conn.execute(
                         "UPDATE shorts SET status = ?, scheduled_at = ? "
@@ -142,6 +155,22 @@ def poll_status_from_notion() -> dict[str, int]:
                     time_changed = True
                 if time_changed:
                     counts["time_overridden"] += 1
+                # Hook (copy1/copy2) override: 노션에서 영빈이 시그니처 카피 수정.
+                copy_changed = False
+                if new_copy1 and new_copy1 != row["copy1"]:
+                    conn.execute(
+                        "UPDATE shorts SET copy1 = ? WHERE id = ?",
+                        (new_copy1, row["id"]),
+                    )
+                    copy_changed = True
+                if new_copy2 and new_copy2 != row["copy2"]:
+                    conn.execute(
+                        "UPDATE shorts SET copy2 = ? WHERE id = ?",
+                        (new_copy2, row["id"]),
+                    )
+                    copy_changed = True
+                if copy_changed:
+                    counts["copy_overridden"] += 1
         conn.commit()
         log.info("approve.poll_status_from_notion", **counts)
         return counts
@@ -228,6 +257,18 @@ def process_approved() -> int:
             if moment is None:
                 _mark_error(conn, short_id, page_id, "moment_not_in_cache")
                 continue
+            # 영빈 노션 Hook override (copy1/copy2). SQLite 값 있으면 cache 덮어쓰기.
+            copy_overrides: dict[str, str] = {}
+            if row["copy1"]:
+                copy_overrides["copy1"] = row["copy1"]
+            if row["copy2"]:
+                copy_overrides["copy2"] = row["copy2"]
+            if copy_overrides:
+                moment = moment.model_copy(update=copy_overrides)
+                log.info(
+                    "approve.copy_overridden",
+                    short_id=short_id, **copy_overrides,
+                )
 
             video = get_video_by_youtube_id(conn, youtube_id)
             if video is None or not video.local_path.exists():
@@ -242,13 +283,24 @@ def process_approved() -> int:
                 )
 
             # face metrics 없으면 즉석 backfill (옛 분석 데이터 호환).
+            # dynamic + segments 없거나 3-tuple legacy(face_count 누락) → rescan 필수.
+            # 3-tuple은 model_validator가 fc=1 default로 채워 모든 segment를 cover
+            # 처리하므로 wide letterbox mix가 안 됨 (P003 케이스).
             face_cx = row["face_center_x"]
             current_scene = row["scene_type"]
-            backfilled_segments: list[tuple[float, float, float]] | None = None
+            backfilled_segments: list[tuple[float, float, float, int]] | None = None
+            legacy_segments = False
+            if current_scene == "face_centered_dynamic" and row["face_segments"]:
+                try:
+                    legacy_segments = any(
+                        len(s) < 4 for s in json.loads(row["face_segments"])
+                    )
+                except Exception:
+                    legacy_segments = True
             need_backfill = (
                 face_cx is None
                 or (current_scene == "face_centered_dynamic"
-                    and not row["face_segments"])
+                    and (not row["face_segments"] or legacy_segments))
             )
             if need_backfill:
                 try:
@@ -291,8 +343,13 @@ def process_approved() -> int:
                 if segments_json:
                     try:
                         raw = json.loads(segments_json)
+                        # 3-tuple (legacy) / 4-tuple 둘 다 호환.
                         face_segments = [
-                            (float(s), float(e), float(c)) for s, e, c in raw
+                            (
+                                float(s[0]), float(s[1]), float(s[2]),
+                                int(s[3]) if len(s) >= 4 else 1,
+                            )
+                            for s in raw
                         ]
                     except Exception as e:
                         log.warning(
@@ -308,6 +365,7 @@ def process_approved() -> int:
                     output,
                     face_center_x=face_cx,
                     face_segments=face_segments,
+                    internal_id=short_internal_id,
                 )
             except Exception as e:
                 log.warning(

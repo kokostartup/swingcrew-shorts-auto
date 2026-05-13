@@ -1,4 +1,4 @@
-"""GitHub Actions용 — slot 시각에 노션 source-of-truth로 FB/IG/Threads/TikTok 게시.
+"""GitHub Actions용 — slot 시각에 노션 source-of-truth로 FB/IG/Threads 게시.
 
 cron 4번/일 (07/11/17/20 KST). 영빈 PC 무관. SQLite 의존성 X.
 
@@ -8,8 +8,10 @@ cron 4번/일 (07/11/17/20 KST). 영빈 PC 무관. SQLite 의존성 X.
   3. R2 URL 구성: {R2_PUBLIC_URL}/{Internal ID}.mp4
   4. 메타: 노션 Title + Description
   5. FB + IG + Threads 게시 (social.py)
-  6. TikTok Buffer 큐 등록 (Buffer Free plan rate limit 안)
-  7. 노션 status='게시'로 전환 + Preview URL 업데이트
+  6. 노션 status='게시'로 전환 + Preview URL 업데이트
+
+TikTok은 게시 흐름에서 제외 (영빈 결정 2026-05-13): Buffer queue는 영빈 PC에서
+publish 시점에 직접 추가. Buffer 자체 슬롯 시각에 자동 게시되므로 cron 불필요.
 
 workflow_dispatch로 수동 trigger 시 모든 'scheduled' 모먼트 처리 (시간 필터 무시).
 """
@@ -47,6 +49,16 @@ SLOT_TOLERANCE_MIN = 15  # 현재 시각 ±15분 모먼트 처리.
 
 # workflow_dispatch에서 SKIP_TIME_FILTER=1 환경변수로 시간 필터 무시 (backlog 일괄 처리용).
 SKIP_TIME_FILTER = os.environ.get("SKIP_TIME_FILTER", "").lower() in {"1", "true", "yes"}
+
+# TARGET_INTERNAL_IDS: 콤마 구분 internal_id 목록. 지정 시 그 모먼트만 처리 (cron 지연 catch-up용).
+_target_raw = os.environ.get("TARGET_INTERNAL_IDS", "").strip()
+TARGET_INTERNAL_IDS: set[str] = (
+    {x.strip() for x in _target_raw.split(",") if x.strip()} if _target_raw else set()
+)
+
+# DRY_RUN: True면 모먼트 fetch + 필터 흐름까지만, 실제 social API 호출 skip.
+# Cloudflare Worker→GitHub workflow 통신 검증용 (실제 게시 안 함).
+DRY_RUN = os.environ.get("DRY_RUN", "").lower() in {"1", "true", "yes"}
 
 
 def _internal_id_from_page(page_id: str) -> str | None:
@@ -125,19 +137,6 @@ def _publish_one_moment(page: dict[str, Any]) -> tuple[bool, dict[str, str]]:
         log.warning("publish_socials.threads_failed", iid=iid, error=str(e))
         results["threads"] = f"error:{e}"
 
-    # TikTok Buffer (선택). Free plan 24h ~13 publish 한도.
-    if settings.buffer_access_token and settings.buffer_tiktok_channel_id:
-        try:
-            from app.integrations import buffer as buffer_api
-            post_id = buffer_api.create_video_post(
-                channel_id=settings.buffer_tiktok_channel_id,
-                text=text, video_url=r2_url, service="tiktok",
-            )
-            results["tiktok"] = f"buffer:{post_id}"
-        except Exception as e:
-            log.warning("publish_socials.tiktok_buffer_failed", iid=iid, error=str(e))
-            results["tiktok"] = f"error:{e}"
-
     # 게시 1개라도 성공이면 status='게시'로 전환.
     success = any(not v.startswith("error:") for v in results.values())
     return success, results
@@ -146,6 +145,8 @@ def _publish_one_moment(page: dict[str, Any]) -> tuple[bool, dict[str, str]]:
 def main() -> None:
     print(f"=== publish_socials_from_notion start ===", flush=True)
     print(f"SKIP_TIME_FILTER={SKIP_TIME_FILTER}", flush=True)
+    if TARGET_INTERNAL_IDS:
+        print(f"TARGET_INTERNAL_IDS={sorted(TARGET_INTERNAL_IDS)}", flush=True)
 
     pages = list_pages_by_status("scheduled")
     print(f"scheduled pages from Notion: {len(pages)}", flush=True)
@@ -156,11 +157,21 @@ def main() -> None:
         sched = page.get("scheduled_at")
         if not sched:
             continue
-        if not SKIP_TIME_FILTER and not _within_slot(sched):
+        # TARGET 지정 시 그 모먼트만 처리 (cron 지연 catch-up 또는 specific re-publish).
+        if TARGET_INTERNAL_IDS:
+            iid = _internal_id_from_page(page["id"])
+            if iid not in TARGET_INTERNAL_IDS:
+                continue
+        elif not SKIP_TIME_FILTER and not _within_slot(sched):
             continue
 
         processed += 1
         print(f"\n[{processed}] page={page['id']} scheduled_at={sched}", flush=True)
+        if DRY_RUN:
+            iid = _internal_id_from_page(page["id"])
+            print(f"  DRY_RUN — would publish iid={iid}", flush=True)
+            success += 1
+            continue
         ok, urls = _publish_one_moment(page)
         if ok:
             success += 1

@@ -1,0 +1,25 @@
+# Cloudflare Worker — SwingCrew 게시 cron trigger.
+# 4번/일 (07/11/17/20 KST) GitHub workflow_dispatch 호출.
+
+name = "swingcrew-publish-cron"
+main = "src/index.js"
+compatibility_date = "2024-09-01"
+
+[triggers]
+# UTC 기준 — KST(+9) 환산:
+#   22:00 UTC = 07:00 KST (전날)
+#   02:00 UTC = 11:00 KST
+#   08:00 UTC = 17:00 KST
+#   11:00 UTC = 20:00 KST
+crons = [
+  "0 22 * * *",
+  "0 2 * * *",
+  "0 8 * * *",
+  "0 11 * * *",
+]
+
+# Secrets는 wrangler secret put 또는 Cloudflare dashboard에서 등록:
+#   GITHUB_PAT    — GitHub Personal Access Token (workflow scope)
+#   GITHUB_OWNER  — repo owner (예: davidhan-biz)
+#   GITHUB_REPO   — repo name (예: swingcrew-auto-shorts)
+#   MANUAL_TOKEN  — /trigger endpoint 인증용 (임의 문자열)

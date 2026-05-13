@@ -69,6 +69,9 @@ _SHORTS_MIGRATIONS = {
     "opening_line": "TEXT",
     "publish_meta_json": "TEXT",
     "pushed_at": "TEXT",
+    # 영빈 노션 Hook override (없으면 cached analysis copy 사용).
+    "copy1": "TEXT",
+    "copy2": "TEXT",
 }
 
 

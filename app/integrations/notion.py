@@ -103,8 +103,28 @@ def _hook_title(moment: MagicMoment) -> str:
     return f"{moment.copy1} / {moment.copy2}"
 
 
-def _moment_properties(video: Video, moment: MagicMoment) -> dict[str, Any]:
-    """MagicMoment → Notion page properties (create 시점 기준 모든 필드)."""
+def _split_hook(hook_text: str) -> tuple[str | None, str | None]:
+    """노션 Hook (title) → (copy1, copy2) 분리. '/' separator로 split.
+
+    영빈 입력 형식: "백스윙 발바닥은 / 외측에 힘 줘야 잘 돌아요!"
+    실패 시 (None, None) — process_approved에서 cached analysis copy 그대로 사용.
+    """
+    if not hook_text or "/" not in hook_text:
+        return None, None
+    parts = hook_text.split("/", 1)
+    c1, c2 = parts[0].strip(), parts[1].strip()
+    if not c1 or not c2:
+        return None, None
+    return c1, c2
+
+
+def _moment_properties(
+    video: Video, moment: MagicMoment, short_internal_id: str | None = None,
+) -> dict[str, Any]:
+    """MagicMoment → Notion page properties (create 시점 기준 모든 필드).
+
+    short_internal_id: 모먼트 단위 ID (예: '26-B002-S04'). 없으면 video.internal_id로 fallback.
+    """
     score = moment.final_score if moment.final_score is not None else moment.score
     props: dict[str, Any] = {
         "Hook": {"title": [{"text": {"content": _hook_title(moment)}}]},
@@ -126,9 +146,10 @@ def _moment_properties(video: Video, moment: MagicMoment) -> dict[str, Any]:
     }
     if moment.scene_type:
         props["Scene Type"] = {"select": {"name": moment.scene_type}}
-    if video.internal_id:
+    internal_id = short_internal_id or video.internal_id
+    if internal_id:
         props["Internal ID"] = {
-            "rich_text": [{"text": {"content": video.internal_id}}],
+            "rich_text": [{"text": {"content": internal_id}}],
         }
     if moment.opening_line:
         props["Opening Line"] = {
@@ -143,13 +164,18 @@ def _moment_properties(video: Video, moment: MagicMoment) -> dict[str, Any]:
     retry=retry_if_exception_type(NotionAPIError),
     reraise=True,
 )
-def create_page(video: Video, moment: MagicMoment) -> str:
-    """Notion DB에 새 후보 페이지 생성 → page_id 반환."""
+def create_page(
+    video: Video, moment: MagicMoment, short_internal_id: str | None = None,
+) -> str:
+    """Notion DB에 새 후보 페이지 생성 → page_id 반환.
+
+    short_internal_id: 모먼트 단위 ID (예: '26-B002-S04').
+    """
     client = _get_client()
     try:
         resp = client.pages.create(
             parent={"database_id": settings.notion_shorts_db_id},
-            properties=_moment_properties(video, moment),
+            properties=_moment_properties(video, moment, short_internal_id),
         )
     except Exception as e:
         raise NotionAPIError(f"create_page failed: {e}") from e
@@ -203,6 +229,12 @@ def list_pages_by_status(status_en: str) -> list[dict[str, Any]]:
             desc_rt = props.get("Description", {}).get("rich_text") or []
             title = "".join(t.get("plain_text") or "" for t in title_rt).strip()
             description = "".join(t.get("plain_text") or "" for t in desc_rt).strip()
+            # Hook (title 컬럼): "copy1 / copy2" 형식 split (영빈 시그니처 카피 override).
+            hook_title_rt = props.get("Hook", {}).get("title") or []
+            hook_text = "".join(
+                t.get("plain_text") or "" for t in hook_title_rt
+            ).strip()
+            copy1, copy2 = _split_hook(hook_text)
             out.append(
                 {
                     "id": str(p["id"]),
@@ -213,6 +245,8 @@ def list_pages_by_status(status_en: str) -> list[dict[str, Any]]:
                     "end_sec": float(end_sec) if end_sec is not None else None,
                     "title": title or None,
                     "description": description or None,
+                    "copy1": copy1,
+                    "copy2": copy2,
                 },
             )
         if not resp.get("has_more"):

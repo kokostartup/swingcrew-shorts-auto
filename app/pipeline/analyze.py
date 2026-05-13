@@ -339,11 +339,13 @@ def _enrich(
         log.warning("analyze.scoring_failed", error=str(e))
         scored = base_moments
 
+    # B/P 시리즈 모두 face_count + cx 기반 자동 분류 (1명 segment=cover crop,
+    # 2명+ segment=wide letterbox). 영빈 결정: narration→시연 mix 영상 자연스럽게.
     enriched: list[MagicMoment] = []
     for m in scored:
         scene: str | None = None
         face_cx: float | None = None
-        segments: list[tuple[float, float, float]] | None = None
+        segments: list[tuple[float, float, float, int]] | None = None
         if video.local_path.exists():
             try:
                 scene, face_cx, segments = classify_scene_with_metrics(

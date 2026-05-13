@@ -119,12 +119,12 @@ def _find_moment(
 
 
 def _upload_r2(internal_id: str, mp4_path: Path) -> str:
-    """R2 업로드. 이미 있으면 skip + URL 반환."""
+    """R2 업로드. mp4 재생성 케이스 대비해 항상 새로 upload (key 동일하면 덮어쓰기).
+
+    이전엔 `object_exists` 시 skip했으나 mp4 재생성 (% fix, 메타 수정 등) 후에도
+    R2엔 옛 파일 그대로 남아 Buffer/외부 fetch에 옛 영상 노출되는 버그 있었음.
+    """
     key = f"{internal_id}.mp4"
-    if r2.object_exists(key):
-        public_url = f"{settings.r2_public_url.rstrip('/')}/{key}"
-        log.info("publish.r2_cache_hit", key=key, public_url=public_url)
-        return public_url
     return r2.upload_video(mp4_path, key=key)
 
 

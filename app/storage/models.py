@@ -73,10 +73,29 @@ class MagicMoment(BaseModel):
     final_score: float | None = None
     face_center_x: float | None = None  # 0~1, 가장 큰 얼굴 중심 x 평균
     # 시간별 segment 분할 — face_centered_dynamic 전용.
-    # 각 항목: (start_offset, end_offset, cx_ratio), 모먼트 시작 기준 상대 시간.
-    face_segments: list[tuple[float, float, float]] | None = None
+    # 각 항목: (start_offset, end_offset, cx_ratio, mode_face_count), 모먼트 시작 기준 상대 시간.
+    # mode_face_count: segment 내 얼굴 수 최빈값 (1=영빈 1명, 2+=2명+ 모드 → fit letterbox).
+    # 기존 3-tuple 데이터 호환: model_validator가 4번째 값 default 1로 채움.
+    face_segments: list[tuple[float, float, float, int]] | None = None
     # 모먼트 시작 부분의 첫 문장 (영빈 hook 검토용).
     opening_line: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_face_segments(cls, data: object) -> object:
+        """기존 3-tuple (start, end, cx) 데이터 → 4-tuple (start, end, cx, fc=1) 호환."""
+        if isinstance(data, dict):
+            segs = data.get("face_segments")
+            if isinstance(segs, list):
+                fixed: list[tuple] = []
+                for s in segs:
+                    if isinstance(s, (list, tuple)):
+                        if len(s) == 3:
+                            fixed.append((float(s[0]), float(s[1]), float(s[2]), 1))
+                        elif len(s) == 4:
+                            fixed.append((float(s[0]), float(s[1]), float(s[2]), int(s[3])))
+                data["face_segments"] = fixed
+        return data
 
     @model_validator(mode="after")
     def _check_time_range(self) -> "MagicMoment":

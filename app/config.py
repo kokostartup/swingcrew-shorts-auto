@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     retention_peak_pad_right_sec: float = 30.0
     retention_peak_min_region_sec: float = 60.0
     retention_peak_max_region_sec: float = 120.0
-    scene_sample_fps: int = 1
+    scene_sample_fps: int = 5  # 0.2초당 1 frame — 0.5초 단위 face_count 변화 감지
     scene_face_area_threshold: float = 0.20
     scoring_w_gemini_with_retention: float = 0.5
     scoring_w_retention: float = 0.3

@@ -1,18 +1,19 @@
 name: publish_slot
 
-# 매 slot 시각 (07/11/17/20 KST = 22/02/08/11 UTC)에 노션에서 모먼트 fetch + FB/IG/Threads/TikTok 게시.
-# workflow_dispatch로 수동 trigger 시 시간 필터 우회 (backlog 일괄 처리).
+# 매 slot 시각(07/11/17/20 KST)에 노션 모먼트 fetch + FB/IG/Threads 게시.
+# GitHub Actions schedule cron은 정각 큐잉 지연으로 자주 누락되어 제거 (2026-05-13).
+# Cloudflare Worker(infra/cloudflare-worker/)가 정시 workflow_dispatch API 호출 → 이 workflow trigger.
+# workflow_dispatch 인자 skip_time_filter=true면 backlog 일괄 처리 (시간 필터 우회).
 
 on:
-  schedule:
-    - cron: '0 22 * * *'  # 07:00 KST (전날 22:00 UTC)
-    - cron: '0 2 * * *'   # 11:00 KST
-    - cron: '0 8 * * *'   # 17:00 KST
-    - cron: '0 11 * * *'  # 20:00 KST
   workflow_dispatch:
     inputs:
       skip_time_filter:
         description: 'true면 모든 scheduled 모먼트 처리 (backlog 일괄)'
+        required: false
+        default: 'false'
+      dry_run:
+        description: 'true면 실제 게시 X (Worker→workflow 통신 검증용)'
         required: false
         default: 'false'
 
@@ -73,10 +74,9 @@ jobs:
           THREADS_APP_ID: ${{ secrets.THREADS_APP_ID }}
           THREADS_APP_SECRET: ${{ secrets.THREADS_APP_SECRET }}
           THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
-          # Buffer (TikTok 큐용, 선택)
-          BUFFER_ACCESS_TOKEN: ${{ secrets.BUFFER_ACCESS_TOKEN }}
-          BUFFER_TIKTOK_CHANNEL_ID: ${{ secrets.BUFFER_TIKTOK_CHANNEL_ID }}
+          # TikTok은 영빈 PC에서 Buffer queue 직접 push (영빈 결정 2026-05-13).
           # workflow_dispatch에서 입력값 전달
           SKIP_TIME_FILTER: ${{ github.event.inputs.skip_time_filter }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
         run: |
           python scripts/publish_socials_from_notion.py

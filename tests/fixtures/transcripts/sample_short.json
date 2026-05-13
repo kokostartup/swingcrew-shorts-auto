@@ -1,0 +1,16 @@
+{
+  "language": "ko",
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 2.5,
+      "text": "안녕하세요 짧은 테스트 샘플",
+      "words": [
+        {"start": 0.0, "end": 0.5, "text": "안녕하세요", "score": 0.95},
+        {"start": 0.7, "end": 1.0, "text": "짧은", "score": 0.93},
+        {"start": 1.2, "end": 1.6, "text": "테스트", "score": 0.91},
+        {"start": 1.8, "end": 2.3, "text": "샘플", "score": 0.89}
+      ]
+    }
+  ]
+}

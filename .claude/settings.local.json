@@ -1,0 +1,74 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run pytest:*)",
+      "Bash(uv run ruff:*)",
+      "Bash(uv sync)",
+      "Bash(uv lock)",
+      "Bash(uv add:*)",
+      "Bash(uv remove:*)",
+      "Bash(ffmpeg:*)",
+      "Bash(ffprobe:*)",
+      "Bash(yt-dlp:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git log:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(tree:*)",
+      "PowerShell(uv run pytest:*)",
+      "PowerShell(uv run ruff:*)",
+      "PowerShell(uv sync)",
+      "PowerShell(uv lock)",
+      "PowerShell(ffprobe:*)",
+      "PowerShell(Get-ChildItem:*)",
+      "PowerShell(Test-Path:*)"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(curl:* | sh)",
+      "Bash(curl:* | bash)",
+      "Bash(iwr:* | iex)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -ExecutionPolicy Bypass -NoProfile -File .claude/hooks/pre-bash-guard.ps1"
+          },
+          {
+            "type": "command",
+            "command": "powershell -ExecutionPolicy Bypass -NoProfile -File .claude/hooks/pre-commit-check.ps1"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -ExecutionPolicy Bypass -NoProfile -File .claude/hooks/post-edit-lint.ps1"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -ExecutionPolicy Bypass -NoProfile -File .claude/hooks/stop-summary.ps1"
+          }
+        ]
+      }
+    ]
+  }
+}

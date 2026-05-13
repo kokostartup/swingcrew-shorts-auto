@@ -1,0 +1,49 @@
+# 환경 변수
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# 출력물
+outputs/*
+!outputs/.gitkeep
+data/*.db
+data/*.db-journal
+
+# 영상/오디오
+*.mp4
+*.mp3
+*.wav
+*.mkv
+*.webm
+
+# OAuth + retention 캐시
+data/youtube_token.json
+data/retention/
+
+# 캐시 (영빈 PC만, GitHub Actions 불필요)
+data/samples/
+data/transcripts/
+data/analyses/
+
+# 머신러닝 모델 (YOLOv8-face, ~84MB — 영빈 PC scene 분류용, GitHub Actions 불필요)
+data/models/
+
+# 폰트 (라이선스)
+app/utils/fonts/*
+!app/utils/fonts/.gitkeep
+
+# 세션 로그
+data/session_log.md
+
+# IDE
+.vscode/
+.idea/
+.DS_Store

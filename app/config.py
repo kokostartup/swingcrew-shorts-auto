@@ -1,6 +1,7 @@
 """환경 변수 단일 진입점 (pydantic-settings)."""
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +12,12 @@ class Settings(BaseSettings):
         extra="ignore",
         case_sensitive=False,
     )
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _strip_strings(cls, v: object) -> object:
+        """GitHub Secrets 복붙 시 trailing newline/공백 자동 제거 (URL/ID 깨짐 방지)."""
+        return v.strip() if isinstance(v, str) else v
 
     # Phase 1: 시그니처 레이아웃
     font_path: Path = Path("app/utils/fonts/Pretendard-Black.otf")

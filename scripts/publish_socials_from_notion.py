@@ -164,10 +164,18 @@ def main() -> None:
         ok, urls = _publish_one_moment(page)
         if ok:
             success += 1
-            print(f"  OK platforms={list(urls.keys())}", flush=True)
-            # 노션 status='게시'로 전환 + Preview URL을 facebook 또는 instagram으로
-            preview = urls.get("instagram") or urls.get("facebook") or urls.get("threads")
-            if preview and not preview.startswith("error:"):
+            ok_platforms = [
+                p for p, u in urls.items() if u and not u.startswith("error:")
+            ]
+            print(f"  OK platforms={ok_platforms}", flush=True)
+            # error로 시작하지 않는 URL 중 우선순위 (instagram > facebook > threads).
+            preview: str | None = None
+            for p in ("instagram", "facebook", "threads"):
+                u = urls.get(p)
+                if u and not u.startswith("error:"):
+                    preview = u
+                    break
+            if preview:
                 try:
                     notion_update(page["id"], "published", preview_url=preview)
                 except Exception as e:

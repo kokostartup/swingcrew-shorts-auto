@@ -1,12 +1,14 @@
-"""Phase 6 멀티 플랫폼 게시 파이프라인.
+"""Phase 6 멀티 플랫폼 게시 — 영빈 PC 단계 (R2 + YouTube publishAt 예약).
 
 흐름:
   status='generated' + Scheduled At 있음
-    → R2 업로드 (mp4 → public URL)
+    → R2 업로드 (mp4 → public URL, Buffer + GitHub Actions 둘 다 fetch 가능)
     → Gemini publish meta (제목/설명/해시태그)
     → YouTube videos.insert (privacyStatus=private + publishAt=Scheduled At)
-    → Buffer createPost x3 (threads/instagram/tiktok 큐 추가)
-    → status='scheduled' + 노션 Published URLs 기록
+    → status='scheduled' + 노션 Published URLs 기록 (youtube URL만)
+
+FB/IG/Threads는 GitHub Actions의 publish_socials_from_notion.py가 slot 시각에 처리.
+TikTok도 동일 워크플로우에서 Buffer 큐로 처리. 영빈 PC에선 social 호출 X.
 """
 from __future__ import annotations
 
@@ -186,26 +188,8 @@ def _publish_one(
         _mark_error(conn, short_id, page_id, f"youtube_upload_failed: {e}")
         return False
 
-    # 4. Buffer 3개 채널 큐 추가.
-    buffer_text = _build_buffer_text(meta)
-    try:
-        channels = buffer_api.get_channels_by_service()
-    except Exception as e:
-        log.warning("publish.buffer_channels_failed", error=str(e))
-        channels = {}
-    for service, channel_id in channels.items():
-        try:
-            post_id = buffer_api.create_video_post(
-                channel_id=channel_id, text=buffer_text,
-                video_url=public_url, service=service,
-            )
-            published_urls[service] = f"buffer:{post_id}"
-        except Exception as e:
-            log.warning(
-                "publish.buffer_post_failed",
-                service=service, short_id=short_id, error=str(e),
-            )
-            published_urls[service] = f"error:{e}"
+    # 4. FB/IG/Threads/TikTok은 GitHub Actions가 slot 시각에 처리 (publish_socials_from_notion).
+    #    영빈 PC는 R2 + YouTube까지만. social 호출 X.
 
     # 5. SQLite + 노션 업데이트.
     urls_json = json.dumps(published_urls, ensure_ascii=False)

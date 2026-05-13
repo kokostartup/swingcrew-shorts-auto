@@ -47,6 +47,8 @@ jobs:
 
       - name: Run publish_socials_from_notion
         env:
+          # repo root을 PYTHONPATH에 — `from app.config import settings` 가능하도록.
+          PYTHONPATH: ${{ github.workspace }}
           # Notion
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_SHORTS_DB_ID: ${{ secrets.NOTION_SHORTS_DB_ID }}

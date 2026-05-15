@@ -89,6 +89,8 @@ before implementation rather than after mistakes.
 - **app/integrations/** - External API clients (YouTube, Notion, Gemini, Buffer, R2)
 - **app/storage/** - SQLite (`data/state.db`) — `videos`, `shorts`, `calibration` 테이블
 - **scripts/** - CLI entry points
+- **.github/workflows/publish_slot.yml** - FB/IG/Threads 게시 워크플로우 (workflow_dispatch만 — schedule cron 제거됨)
+- **infra/cloudflare-worker/** - 정시 cron trigger (GitHub Actions schedule 큐잉 지연 회피용)
 - **.claude/** - Claude Code harness (agents, skills, commands, hooks, rules)
 
 각 파이프라인 단계는 독립 실행 가능하며 결과를 SQLite에 캐시 → 재실행 시
@@ -107,8 +109,9 @@ cron에서 제거** (영빈 결정 2026-05-13): 영빈이 어떤 미드폼을 �
 3. **Scheduled At 자동 할당** — `status='generated'` + `scheduled_at IS NULL`인 행에
    다음 빈 슬롯 할당. 슬롯: 매일 KST 07/11/17/20시, 최소 24h 검토 lead 보장
    (`MIN_LEAD_HOURS=24`). 노션 Scheduled At 컬럼도 동시 업데이트.
-4. **멀티 플랫폼 게시** — Scheduled At 가까운 모먼트 → R2 업로드 → YouTube
-   private + publishAt 예약 + Buffer (Instagram Reels / TikTok / Threads).
+4. **YouTube 예약 게시** — Scheduled At 있는 `status='generated'` 모먼트 → R2 업로드 +
+   YouTube private + publishAt 예약 → `status='scheduled'`. FB/IG/Threads는 별도 흐름
+   (아래 "슬롯 게시 흐름" 참고). TikTok은 Buffer queue로 영빈이 수동 처리.
 5. **자동 거절** — `pushed_at`이 7일 이상 지났는데 영빈이 ✅ 안 한 'proposed'
    모먼트 → 자동 `rejected`.
 6. **Phase 8 calibration** — `calibrate()` 호출. 미드폼 retention spike 분포 +
@@ -124,9 +127,29 @@ cron에서 제거** (영빈 결정 2026-05-13): 영빈이 어떤 미드폼을 �
 
 ### 상태 머신 (`shorts.status`)
 `proposed` → (영빈 ✅) → `approved` → (ffmpeg+메타) → `generated` →
-(slot 할당) → (publish) → `published`.
+(slot 할당) → (publish_ready) → `scheduled` → (슬롯 시각 publish_socials) → `published`.
 거절 경로: `proposed` → `rejected` (영빈 ❌ 또는 7일 무응답 자동).
 `error`는 처리 실패 표시.
+
+### 슬롯 게시 흐름 (Cloudflare Worker → GitHub Actions)
+YouTube는 `publish_ready`가 publishAt으로 예약하면 시각 도래 시 YouTube 자체가 게시.
+FB/IG/Threads는 외부 cron trigger가 필요:
+
+1. **Cloudflare Worker cron** ([infra/cloudflare-worker/](infra/cloudflare-worker/)) — 매 슬롯 시각
+   (07/11/17/20 KST) GitHub workflow_dispatch API 호출. GitHub schedule cron은 정각
+   큐잉 지연/누락 잦아서 Cloudflare로 대체 (2026-05-14 결정).
+2. **GitHub Actions** ([publish_slot.yml](.github/workflows/publish_slot.yml)) — workflow_dispatch만,
+   schedule 제거됨. `publish_socials_from_notion.py` 실행.
+3. **publish_socials_from_notion.py** — 노션 'scheduled' 페이지 fetch → 현재 시각 ±15분
+   필터 → R2 URL fetch → FB/IG/Threads 게시 → 노션 status='게시' 전환.
+4. **TikTok**: Buffer queue로 영빈 PC에서 publish_ready 직후 수동 추가 (publish_socials에서 제거됨).
+
+**catch-up trigger** (cron 지연 시):
+```powershell
+$env:TARGET_INTERNAL_IDS = "26-P002-S04"  # 콤마 구분 여러 개 가능
+.venv/Scripts/python.exe scripts/publish_socials_from_notion.py
+```
+`DRY_RUN=true` env로 실제 게시 X (통신 검증용).
 
 ### 게시 전 메타 override 우선순위 (publish.py `_resolve_meta`)
 1. 노션 Title/Description (영빈 수정값) → 2. SQLite `publish_meta_json` (Gemini
@@ -146,6 +169,25 @@ cron에서 제거** (영빈 결정 2026-05-13): 영빈이 어떤 미드폼을 �
 Gemini가 transcript의 `[start-end]` 라벨에서 `end`값을 다음 hook 시작으로 잡는
 경향이 있음 (그 시점은 발화 silence). 후처리로 그 이후 첫 발화 word.start로 snap →
 영상 cut + opening_line 둘 다 실제 발화 시작과 일치.
+
+### 시그니처 카피 렌더링 (template.py / edit.py)
+- **ASS subtitles (libass)** 사용 — drawtext per-glyph 폐기 (자간/% glyph silent skip 등 문제).
+  `write_signature_ass`가 ASS 파일 생성, `signature_filter_segment_ass`가 ffmpeg
+  `subtitles=` filter chain. ASS 파일은 mp4 옆에 임시 저장 후 ffmpeg 성공 시 정리.
+- **copy1/copy2 독립 fit fontsize** — `_ass_fit_single_line`이 PIL `ImageFont.getlength`
+  (advance sum, ASS libass와 동일 metric)로 측정. 짧은 줄은 더 크게, 긴 줄은 max에 맞춰.
+- **Pretendard-Black.otf** — fontsdir로 명시. ASS Style Fontname=`Pretendard Black`.
+- **Audio mono-mix** — `pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1` 모든 영상에 적용
+  (P006 R-only stereo 원본 정규화 + 정상 stereo도 양쪽 mix). dynamic은 filter_complex
+  내 chain, 기타 strategy는 `-af` 옵션.
+
+### dynamic scene (face_centered_dynamic)
+- segments 4-tuple `(start, end, cx, face_count)`. face_count는 `_build_segments`가
+  YOLOv8-face로 측정한 frame별 face_count의 segment 최빈값.
+- segment 별 처리: face_count==1 → cover scale crop (1명 close-up), face_count>=2 또는
+  ==0 또는 face_area<1% → wide letterbox 6:4 (시연/multi-person, padding 검정).
+- segment 사이 `XFADE_DURATION=0.3s` cross-fade + 끝 연장으로 어미 안 잘림.
+- approve.py `process_approved`가 3-tuple legacy segments 자동 감지 → rescan으로 갱신.
 
 ### Phase 8 calibration 학습 루프 (`app/pipeline/calibrate.py`)
 - **C (미드폼 retention)** — 채널 미드폼 retention curve의 양수 slope 분포 →
@@ -247,3 +289,5 @@ When the task fits one of these domains, delegate to the matching subagent:
 - Add features beyond what was requested (Behavioral #2)
 - Refactor unrelated code (Behavioral #3)
 - Skip writing a verification step (Behavioral #4)
+- **`publish_ready()` / YouTube upload / R2 upload 자동 호출 금지** — 영빈 명시
+  ("예약 걸어줘"/"게시해") 후에만. `process_approved` (mp4 + 메타)까지가 자동 한계.

@@ -16,6 +16,10 @@ on:
         description: 'true면 실제 게시 X (Worker→workflow 통신 검증용)'
         required: false
         default: 'false'
+      target_internal_ids:
+        description: '콤마 구분 internal_id 목록 (지정 시 그 모먼트만 처리, cron 누락 catch-up용)'
+        required: false
+        default: ''
 
 jobs:
   publish:
@@ -78,5 +82,6 @@ jobs:
           # workflow_dispatch에서 입력값 전달
           SKIP_TIME_FILTER: ${{ github.event.inputs.skip_time_filter }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
+          TARGET_INTERNAL_IDS: ${{ github.event.inputs.target_internal_ids }}
         run: |
           python scripts/publish_socials_from_notion.py

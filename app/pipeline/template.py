@@ -16,16 +16,17 @@ CANVAS_H = 1920
 TOP_BAND_H = 480
 VIDEO_H = 1350
 
-# 한글 평균 글자 폭 ÷ fontsize (Pretendard-Black 기준 추정).
-KOREAN_RATIO = 0.90
-ASCII_RATIO = 0.55
-SPACE_RATIO = 0.30
-QUOTE_RATIO = 0.30
-# 자간 (음수 = 좁힘, 폰트 사이즈 대비 비율). 너무 좁히면 답답해 보여서 약하게.
-LETTER_SPACING_RATIO = -0.06
-# 한글<->ASCII(또는 '%') 경계 추가 padding — ASCII 글리프가 한글보다 좌우 여백이
-# 좁아서 자간만으로는 시각적으로 닿아 보이는 케이스 해결 (P003 "60%만", "20m더").
-BOUNDARY_PADDING_RATIO = 0.08
+# 한글 평균 글자 폭 ÷ fontsize (Pretendard-Black, ASS libass rendering 기준).
+# 이전 drawtext 추정값(0.90)이 ASS 실제 너비(~0.60)보다 크게 잡혀 fit fontsize가
+# 보수적으로 결정됨 → 양옆 여유 과다 (P005 사례). ASS 실측 기준으로 calibrate.
+KOREAN_RATIO = 0.62
+ASCII_RATIO = 0.42
+SPACE_RATIO = 0.22
+QUOTE_RATIO = 0.22
+# ASS Spacing=0 (libass 폰트 metric 기반 자연 자간) → fit 식에서도 추가 spacing 없음.
+LETTER_SPACING_RATIO = 0.0
+# ASS는 글리프 metric 기반이라 한글<->ASCII 경계도 자연스러움. 추가 padding 불필요.
+BOUNDARY_PADDING_RATIO = 0.0
 # ASCII baseline 보정: drawtext y는 bounding box 상단 기준이라
 # 한글(em-square)과 ASCII(cap-height)가 같은 y면 ASCII가 위로 떠 보임.
 # Pretendard-Black 기준 fit 값.
@@ -270,14 +271,40 @@ def _ass_escape_text(text: str) -> str:
     )
 
 
+def _ass_fit_single_line(
+    text: str,
+    max_width: int = COPY_MAX_WIDTH,
+    max_size: int = COPY_MAX_FONTSIZE,
+) -> int:
+    """단일 줄이 max_width 안에 fit하는 최대 fontsize (PIL getlength 기준)."""
+    from PIL import ImageFont
+
+    font_path = str(settings.font_path.resolve())
+    lo, hi = 32, max_size
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        try:
+            font = ImageFont.truetype(font_path, mid)
+        except Exception:
+            return lo
+        if font.getlength(text) <= max_width:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
 def _ass_fit_fontsize(
     copy1: str,
     copy2: str,
     max_width: int = COPY_MAX_WIDTH,
     max_size: int = COPY_MAX_FONTSIZE,
 ) -> int:
-    """ASS rendering 기준 두 줄 fontsize fit. drawtext 기반 fit과 비슷한 근사."""
-    return fit_two_lines_fontsize(copy1, copy2, max_width, max_size)
+    """두 줄 동일 fontsize fit (legacy — drawtext signature_filter_segment용)."""
+    return min(
+        _ass_fit_single_line(copy1, max_width, max_size),
+        _ass_fit_single_line(copy2, max_width, max_size),
+    )
 
 
 def write_signature_ass(
@@ -303,12 +330,15 @@ def write_signature_ass(
 
     n1 = _normalize_quotes(copy1)
     n2 = _normalize_quotes(copy2)
-    size = _ass_fit_fontsize(n1, n2)
-    line_height = int(size * 1.15)
+    # copy1, copy2 각자 독립 fit — 짧은 줄은 더 크게, 긴 줄은 자기 max에 맞춰서.
+    size1 = _ass_fit_single_line(n1)
+    size2 = _ass_fit_single_line(n2)
+    line1_height = int(size1 * 1.15)
+    line2_height = int(size2 * 1.15)
     # 검정박스(높이 TOP_BAND_H) 하단에서 COPY_BOTTOM_MARGIN 띄우고 copy2가 위치.
     # ASS alignment 8 = top-center, MarginV = text top edge부터 PlayResY top까지.
-    copy2_top = TOP_BAND_H - COPY_BOTTOM_MARGIN - line_height
-    copy1_top = copy2_top - line_height
+    copy2_top = TOP_BAND_H - COPY_BOTTOM_MARGIN - line2_height
+    copy1_top = copy2_top - line1_height
 
     primary_white = _ass_color("#FFFFFF")
     primary_yellow = _ass_color("#FFE500")
@@ -330,10 +360,10 @@ def write_signature_ass(
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Copy1,Pretendard Black,{size},{primary_white},{primary_white},"
+        f"Style: Copy1,Pretendard Black,{size1},{primary_white},{primary_white},"
         f"{outline_color},{outline_color},1,0,0,0,100,100,0,0,1,0,0,"
         f"8,{COPY_SIDE_MARGIN},{COPY_SIDE_MARGIN},{copy1_top},1\n"
-        f"Style: Copy2,Pretendard Black,{size},{primary_yellow},{primary_yellow},"
+        f"Style: Copy2,Pretendard Black,{size2},{primary_yellow},{primary_yellow},"
         f"{outline_color},{outline_color},1,0,0,0,100,100,0,0,1,0,0,"
         f"8,{COPY_SIDE_MARGIN},{COPY_SIDE_MARGIN},{copy2_top},1\n"
         "\n"

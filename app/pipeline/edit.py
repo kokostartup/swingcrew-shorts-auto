@@ -281,14 +281,22 @@ def make_short(
 
     # 보통: 정확한 seek (-ss를 -i 뒤). dynamic은 filter trim이 cut 처리하므로
     # input 측 fast seek로 두어야 trim 시간(모먼트 상대)이 정확히 매칭됨.
+    # audio mono-mix: 원본이 한쪽 채널만 있는 경우(P006) 양쪽으로 정규화.
+    # 정상 stereo 원본도 양쪽 동일 mix (영빈 골프 영상은 spatial 효과 무관).
+    audio_pan = "pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1"
     if strategy == "face_centered_dynamic":
+        # dynamic은 filter_complex 안에 [aout] (acrossfade chain) 이미 있음.
+        # 같은 stream에 simple -af 추가 못함 → filter_complex 안에 pan chain.
+        filter_complex_with_pan = (
+            f"{filter_complex};[aout]{audio_pan}[aout_mixed]"
+        )
         cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             *input_decoder,
             "-ss", str(start), "-to", str(end),
             "-i", str(src),
-            "-filter_complex", filter_complex,
-            "-map", "[out]", "-map", "[aout]",  # video + audio xfade chain
+            "-filter_complex", filter_complex_with_pan,
+            "-map", "[out]", "-map", "[aout_mixed]",
             *encoder,
             "-c:a", "aac", "-b:a", "128k",
             "-r", "30", "-pix_fmt", "yuv420p",
@@ -303,6 +311,7 @@ def make_short(
             "-ss", str(start), "-to", str(end),
             "-filter_complex", filter_complex,
             "-map", "[out]", "-map", "0:a?",
+            "-af", audio_pan,
             *encoder,
             "-c:a", "aac", "-b:a", "128k",
             "-r", "30", "-pix_fmt", "yuv420p",

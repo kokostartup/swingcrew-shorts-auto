@@ -13,15 +13,10 @@ compatibility_date = "2024-09-01"
 #   11:00 UTC = 20:00 KST
 # `:05` 5분 후 cron은 health-check — GitHub-hosted runner 적체로 queued인
 # publish_slot run이 있으면 cancel + 재dispatch (2026-05-15 17:00 KST 누락 사고 대응).
+# Cloudflare Workers Free plan cron 5개 제한 — multi-value 표현으로 2개에 모두 담음.
 crons = [
-  "0 22 * * *",
-  "5 22 * * *",
-  "0 2 * * *",
-  "5 2 * * *",
-  "0 8 * * *",
-  "5 8 * * *",
-  "0 11 * * *",
-  "5 11 * * *",
+  "0 22,2,8,11 * * *",
+  "5 22,2,8,11 * * *",
 ]
 
 # Secrets는 wrangler secret put 또는 Cloudflare dashboard에서 등록:

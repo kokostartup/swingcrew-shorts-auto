@@ -49,6 +49,7 @@ class Video(BaseModel):
     processed_at: str | None = None
     internal_id: str | None = None
     local_path: Path
+    channel: str = "ko"  # ko/en. 영어 채널은 ingest에서 자동 감지.
 
 
 class MagicMoment(BaseModel):

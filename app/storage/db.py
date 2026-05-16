@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS calibration (
 # 기존 DB에 누락된 컬럼 (ALTER TABLE은 IF NOT EXISTS 지원 X).
 _VIDEOS_MIGRATIONS = {
     "internal_id": "TEXT",
+    # ko/en. NULL/legacy = 'ko'. ingest 시 YouTube channelId 매핑으로 자동 결정.
+    "channel": "TEXT DEFAULT 'ko'",
 }
 _SHORTS_MIGRATIONS = {
     "notion_page_id": "TEXT",
@@ -72,6 +74,8 @@ _SHORTS_MIGRATIONS = {
     # 영빈 노션 Hook override (없으면 cached analysis copy 사용).
     "copy1": "TEXT",
     "copy2": "TEXT",
+    # ko/en. 부모 video.channel을 복사 (조회 편의용).
+    "channel": "TEXT DEFAULT 'ko'",
 }
 
 
@@ -116,20 +120,22 @@ def upsert_video(
     duration: int,
     published_at: str | None = None,
     internal_id: str | None = None,
+    channel: str = "ko",
 ) -> int:
     """videos 테이블에 INSERT or UPDATE. row id 반환."""
     cur = conn.execute(
         """
-        INSERT INTO videos (youtube_id, title, duration, published_at, internal_id)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO videos (youtube_id, title, duration, published_at, internal_id, channel)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(youtube_id) DO UPDATE SET
             title = excluded.title,
             duration = excluded.duration,
             published_at = excluded.published_at,
-            internal_id = COALESCE(excluded.internal_id, videos.internal_id)
+            internal_id = COALESCE(excluded.internal_id, videos.internal_id),
+            channel = excluded.channel
         RETURNING id
         """,
-        (youtube_id, title, duration, published_at, internal_id),
+        (youtube_id, title, duration, published_at, internal_id, channel),
     )
     row = cur.fetchone()
     conn.commit()
@@ -159,6 +165,7 @@ def get_video_by_youtube_id(
         processed_at=row["processed_at"],
         internal_id=row["internal_id"],
         local_path=settings.samples_dir / f"{youtube_id}.mp4",
+        channel=row["channel"] if "channel" in row.keys() else "ko",
     )
 
 

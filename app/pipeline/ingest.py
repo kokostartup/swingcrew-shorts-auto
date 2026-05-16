@@ -125,6 +125,29 @@ def _detect_channel_safe(youtube_id: str) -> str:
         return "ko"
 
 
+def _next_en_internal_id(conn: Any) -> str:
+    """EN 채널 자동 internal_id 부여. videos.channel='en' 중 max 26-E### + 1.
+
+    영빈이 한국 채널 영상엔 description에 26-B###/26-P###를 직접 적지만 영어 채널은
+    자동 흐름이라 SQLite가 순차 부여 (예: 26-E001, 26-E002, ...). 연도 prefix는 한국
+    채널과 동일하게 '26'으로.
+    """
+    rows = conn.execute(
+        "SELECT internal_id FROM videos "
+        "WHERE channel = 'en' AND internal_id LIKE '26-E%'"
+    ).fetchall()
+    used: set[int] = set()
+    for r in rows:
+        iid = r["internal_id"] or ""
+        suffix = iid[len("26-E"):]
+        if suffix.isdigit():
+            used.add(int(suffix))
+    n = 1
+    while n in used:
+        n += 1
+    return f"26-E{n:03d}"
+
+
 def ingest(youtube_id_or_url: str) -> Video:
     """YouTube URL/ID로 영상 다운로드 + SQLite 등록.
 
@@ -138,9 +161,25 @@ def ingest(youtube_id_or_url: str) -> Video:
     try:
         existing = get_video_by_youtube_id(conn, youtube_id)
         if existing is not None and local_path.exists():
+            # EN 채널인데 internal_id 누락(legacy 행) → 자동 부여 + 반영.
+            if existing.channel == "en" and not existing.internal_id:
+                new_iid = _next_en_internal_id(conn)
+                conn.execute(
+                    "UPDATE videos SET internal_id = ? WHERE youtube_id = ?",
+                    (new_iid, youtube_id),
+                )
+                conn.commit()
+                log.info(
+                    "ingest.en_internal_id_assigned_legacy",
+                    youtube_id=youtube_id, internal_id=new_iid,
+                )
+                existing = get_video_by_youtube_id(conn, youtube_id)
             log.info(
                 "ingest.cache_hit",
-                youtube_id=youtube_id, channel=existing.channel, path=str(local_path),
+                youtube_id=youtube_id,
+                channel=existing.channel if existing else "ko",
+                internal_id=existing.internal_id if existing else None,
+                path=str(local_path),
             )
             return existing
 
@@ -155,11 +194,18 @@ def ingest(youtube_id_or_url: str) -> Video:
         description = str(meta.get("description") or "")
         internal_id = _extract_internal_id(description)
         if internal_id is None:
-            log.warning(
-                "ingest.internal_id_missing",
-                youtube_id=youtube_id,
-                hint="description 맨 하단에 'YY-B001' 같은 ID 추가 필요",
-            )
+            if channel == "en":
+                internal_id = _next_en_internal_id(conn)
+                log.info(
+                    "ingest.en_internal_id_auto_assigned",
+                    youtube_id=youtube_id, internal_id=internal_id,
+                )
+            else:
+                log.warning(
+                    "ingest.internal_id_missing",
+                    youtube_id=youtube_id,
+                    hint="description 맨 하단에 'YY-B001' 같은 ID 추가 필요",
+                )
 
         if not local_path.exists():
             _download(youtube_id, local_path)

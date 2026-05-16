@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     transcripts_dir: Path = Path("data/transcripts")
     whisperx_model: str = "large-v3"
     whisperx_device: str = "cuda"
-    whisperx_language: str = "ko"
+    whisperx_language: str = "ko"  # 한국 채널 기본. 영어 채널은 자동으로 'en' 사용.
     whisperx_compute_type: str = "float16"
     whisperx_batch_size: int = 16
 
@@ -47,9 +47,11 @@ class Settings(BaseSettings):
     # Phase 4: YouTube OAuth + Retention + Scene + Scoring
     youtube_oauth_client_id: str = ""
     youtube_oauth_client_secret: str = ""
-    youtube_channel_id: str = ""
+    youtube_channel_id: str = ""  # 한국 채널 (기본 채널)
+    youtube_channel_id_en: str = ""  # 영어 채널 (UC_bozFPr44f-eRNYj544L3Q)
     youtube_api_key: str = ""
-    youtube_token_path: Path = Path("data/youtube_token.json")
+    youtube_token_path: Path = Path("data/youtube_token.json")  # 한국 채널 token
+    youtube_token_path_en: Path = Path("data/youtube_token_en.json")  # 영어 채널 token
     retention_dir: Path = Path("data/retention")
     retention_min_days: int = 7
     # Phase 8 학습 루프가 calibration 테이블에서 override 가능한 parameter들.
@@ -68,7 +70,8 @@ class Settings(BaseSettings):
 
     # Phase 5: 노션 승인 워크플로우
     notion_token: str = ""
-    notion_shorts_db_id: str = ""
+    notion_shorts_db_id: str = ""  # 한국 채널 DB
+    notion_shorts_db_id_en: str = ""  # 영어 채널 DB (774a492d5d7d48f6970298d574b31452)
     shorts_output_dir: Path = Path("outputs/shorts")
 
     # Phase 6: 멀티 플랫폼 게시 (Cloudflare R2 + Buffer)

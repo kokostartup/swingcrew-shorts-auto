@@ -33,9 +33,17 @@ def sync_to_notion(video: Video, result: AnalysisResult) -> int:
     """분석된 모먼트 중 노션 push 안 된 것만 push (멱등).
 
     SQLite shorts.notion_page_id가 NULL인 행만 대상.
+
+    한국 채널 (video.channel='ko'): notion + SQLite status='proposed'
+        → 영빈이 노션에서 ✅ 토글 필요.
+    영어 채널 (video.channel='en'): notion + SQLite status='approved' (자동)
+        → 영빈 토글 단계 skip, 다음 process_approved에서 바로 ffmpeg.
     """
     if video.id is None:
         raise ValueError("video.id 누락 — analyze() 먼저 호출하세요.")
+
+    # EN 채널은 영빈 ✅ 단계 skip → 'approved'로 즉시 진입.
+    initial_status = "approved" if video.channel == "en" else "proposed"
 
     conn = get_connection()
     try:
@@ -69,26 +77,33 @@ def sync_to_notion(video: Video, result: AnalysisResult) -> int:
                     "UPDATE shorts SET internal_id = ? WHERE id = ?",
                     (short_iid, row["id"]),
                 )
-            page_id = notion_create_page(video, moment, short_iid)
+            page_id = notion_create_page(
+                video, moment, short_iid,
+                channel=video.channel, initial_status=initial_status,
+            )
             from datetime import UTC, datetime
             conn.execute(
-                "UPDATE shorts SET notion_page_id = ?, status = 'proposed', "
+                "UPDATE shorts SET notion_page_id = ?, status = ?, "
                 "pushed_at = ? WHERE id = ?",
-                (page_id, datetime.now(UTC).isoformat(), row["id"]),
+                (page_id, initial_status, datetime.now(UTC).isoformat(), row["id"]),
             )
             created += 1
         conn.commit()
         log.info(
             "approve.sync_to_notion",
-            youtube_id=video.youtube_id, created=created, total=len(rows),
+            youtube_id=video.youtube_id, channel=video.channel,
+            initial_status=initial_status, created=created, total=len(rows),
         )
         return created
     finally:
         conn.close()
 
 
-def poll_status_from_notion() -> dict[str, int]:
+def poll_status_from_notion(channel: str = "ko") -> dict[str, int]:
     """노션 → SQLite 단방향 sync (영빈 토글 결과 + Scheduled At + Scene Type override).
+
+    영어 채널은 영빈 토글 단계 없지만, Scheduled At/Scene/Time override는 가능하므로
+    호출 자체는 의미 있음 (run_daily가 ko/en 각각 호출).
 
     Returns:
         {"approved": N, "rejected": N, "scheduled_synced": N, "scene_overridden": N}
@@ -102,7 +117,7 @@ def poll_status_from_notion() -> dict[str, int]:
     try:
         # 'generated'는 status 전환 아닌 Scheduled At sync 전용 (publish 트리거).
         for status_en in ("approved", "rejected", "generated"):
-            pages = notion_list(status_en)
+            pages = notion_list(status_en, channel=channel)
             for p in pages:
                 row = conn.execute(
                     "SELECT id, status, scheduled_at, scene_type, "
@@ -422,6 +437,7 @@ def auto_reject_stale(max_age_days: int = 7) -> int:
     """N일 동안 ✅ 안 받은 'proposed' 모먼트 → 자동 거절.
 
     SQLite shorts.pushed_at 기준. status='rejected' + 노션 Status='거절'.
+    EN 채널은 'proposed' 단계 안 거치므로 (즉시 'approved') 영향 없음.
     """
     from datetime import UTC, datetime, timedelta
 
@@ -430,7 +446,7 @@ def auto_reject_stale(max_age_days: int = 7) -> int:
     rejected = 0
     try:
         rows = conn.execute(
-            "SELECT id, notion_page_id FROM shorts "
+            "SELECT id, notion_page_id, channel FROM shorts "
             "WHERE status = 'proposed' "
             "  AND pushed_at IS NOT NULL "
             "  AND pushed_at < ?",

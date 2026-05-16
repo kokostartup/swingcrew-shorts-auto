@@ -1,10 +1,13 @@
 """Phase 7 cron: Scheduled At 자동 채움.
 
-매일 4 슬롯 (KST 7/11/17/20시) 중 다음 빈 슬롯에 영빈 ✅한 모먼트 자동 예약.
+채널별 슬롯 (channel-aware):
+  - 한국 (ko): 매일 KST 07/11/17/20 (4슬롯)
+  - 영어 (en): 매일 America/Los_Angeles wall clock 07/20 (2슬롯, DST 자동)
 """
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from app.storage.db import get_connection
 from app.utils.logger import get_logger
@@ -12,39 +15,67 @@ from app.utils.logger import get_logger
 log = get_logger(__name__)
 
 KST = timezone(timedelta(hours=9))
+LA = ZoneInfo("America/Los_Angeles")  # DST 자동 (PST/PDT)
+
 SLOT_HOURS_KST = [7, 11, 17, 20]
+SLOT_HOURS_LA = [7, 20]  # 영어 채널: 미서부 morning + evening prime time
+
+# channel별 timezone + 슬롯 시간.
+_CHANNEL_TZ: dict[str, ZoneInfo | timezone] = {"ko": KST, "en": LA}
+_CHANNEL_SLOTS: dict[str, list[int]] = {"ko": SLOT_HOURS_KST, "en": SLOT_HOURS_LA}
+
 # 영빈 검토 시간 보장: ffmpeg 완료 후 최소 N시간 미래 슬롯에만 예약.
-MIN_LEAD_HOURS = 24
+# 영어 채널은 자동 흐름이라 검토 시간 불필요 → 0시간으로.
+MIN_LEAD_HOURS_KO = 24
+MIN_LEAD_HOURS_EN = 0
 
 
-def _kst_now() -> datetime:
-    return datetime.now(UTC).astimezone(KST)
+def _tz_for(channel: str) -> ZoneInfo | timezone:
+    return _CHANNEL_TZ.get(channel, KST)
+
+
+def _slot_hours_for(channel: str) -> list[int]:
+    return _CHANNEL_SLOTS.get(channel, SLOT_HOURS_KST)
+
+
+def _min_lead_hours_for(channel: str) -> int:
+    return MIN_LEAD_HOURS_EN if channel == "en" else MIN_LEAD_HOURS_KO
+
+
+def _now_in(tz: ZoneInfo | timezone) -> datetime:
+    return datetime.now(UTC).astimezone(tz)
 
 
 def _candidate_slots(
-    now_kst: datetime, max_lookahead_days: int = 30,
+    channel: str, max_lookahead_days: int = 30,
 ) -> list[datetime]:
-    """now + MIN_LEAD_HOURS 이후의 슬롯 후보 (시간순)."""
-    earliest = now_kst + timedelta(hours=MIN_LEAD_HOURS)
+    """channel별 다음 빈 슬롯 후보 (시간순). MIN_LEAD_HOURS 이후."""
+    tz = _tz_for(channel)
+    slot_hours = _slot_hours_for(channel)
+    now = _now_in(tz)
+    earliest = now + timedelta(hours=_min_lead_hours_for(channel))
     slots: list[datetime] = []
     day = earliest.date()
     for _ in range(max_lookahead_days):
-        for h in SLOT_HOURS_KST:
-            slot = datetime(day.year, day.month, day.day, h, 0, tzinfo=KST)
+        for h in slot_hours:
+            slot = datetime(day.year, day.month, day.day, h, 0, tzinfo=tz)
             if slot > earliest:
                 slots.append(slot)
         day = day + timedelta(days=1)
     return slots
 
 
-def _existing_scheduled_kst() -> set[datetime]:
-    """SQLite shorts에 이미 예약된 Scheduled At 시간 (KST 분 단위 정확히 매치용)."""
+def _existing_scheduled_in(channel: str) -> set[datetime]:
+    """해당 channel에서 이미 예약된 슬롯 시각 (channel-tz 분 단위)."""
+    tz = _tz_for(channel)
     conn = get_connection()
     try:
         rows = conn.execute(
             "SELECT scheduled_at FROM shorts "
             "WHERE scheduled_at IS NOT NULL "
-            "  AND status NOT IN ('rejected', 'error')"
+            "  AND status NOT IN ('rejected', 'error') "
+            "  AND channel = ?",
+            (channel,),
         ).fetchall()
     finally:
         conn.close()
@@ -56,9 +87,9 @@ def _existing_scheduled_kst() -> set[datetime]:
         try:
             dt = datetime.fromisoformat(sched)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=KST)
-            kst = dt.astimezone(KST)
-            used.add(kst.replace(second=0, microsecond=0))
+                dt = dt.replace(tzinfo=tz)
+            local = dt.astimezone(tz)
+            used.add(local.replace(second=0, microsecond=0))
         except ValueError:
             continue
     return used
@@ -66,15 +97,16 @@ def _existing_scheduled_kst() -> set[datetime]:
 
 def assign_scheduled_at_for_pending(
     pending_short_ids: list[int] | None = None,
+    channel: str = "ko",
 ) -> int:
     """status='generated' + scheduled_at IS NULL인 모먼트에 다음 빈 슬롯 할당.
 
+    channel: 'ko' 또는 'en'. ko는 KST 4슬롯, en은 LA 2슬롯.
     pending_short_ids: 특정 행만 처리. None이면 모든 적격 행.
     반환: 할당된 모먼트 수.
     """
-    now_kst = _kst_now()
-    candidates = _candidate_slots(now_kst)
-    used = _existing_scheduled_kst()
+    candidates = _candidate_slots(channel)
+    used = _existing_scheduled_in(channel)
 
     conn = get_connection()
     assigned = 0
@@ -82,12 +114,13 @@ def assign_scheduled_at_for_pending(
         sql = (
             "SELECT id, internal_id, notion_page_id FROM shorts "
             "WHERE status = 'generated' AND scheduled_at IS NULL "
+            "  AND channel = ? "
         )
-        params: tuple[int, ...] = ()
+        params: tuple = (channel,)
         if pending_short_ids:
             placeholders = ",".join("?" * len(pending_short_ids))
             sql += f" AND id IN ({placeholders})"
-            params = tuple(pending_short_ids)
+            params = (channel, *pending_short_ids)
         sql += " ORDER BY id"
         rows = conn.execute(sql, params).fetchall()
 
@@ -102,13 +135,13 @@ def assign_scheduled_at_for_pending(
             if next_slot is None:
                 log.warning(
                     "schedule.no_slot_available",
-                    short_id=r["id"], lookahead_days=30,
+                    short_id=r["id"], channel=channel, lookahead_days=30,
                 )
                 break
-            iso_kst = next_slot.isoformat()
+            iso_local = next_slot.isoformat()
             conn.execute(
                 "UPDATE shorts SET scheduled_at = ? WHERE id = ?",
-                (iso_kst, r["id"]),
+                (iso_local, r["id"]),
             )
             conn.commit()
             if r["notion_page_id"]:
@@ -122,7 +155,7 @@ def assign_scheduled_at_for_pending(
             log.info(
                 "schedule.assigned",
                 short_id=r["id"], internal_id=r["internal_id"],
-                slot=iso_kst,
+                channel=channel, slot=iso_local,
             )
             assigned += 1
         return assigned
@@ -130,7 +163,7 @@ def assign_scheduled_at_for_pending(
         conn.close()
 
 
-def _push_scheduled_to_notion(page_id: str, slot_kst: datetime) -> None:
+def _push_scheduled_to_notion(page_id: str, slot_local: datetime) -> None:
     """노션 Scheduled At date property 업데이트."""
     from app.integrations.notion import _get_client
 
@@ -138,13 +171,15 @@ def _push_scheduled_to_notion(page_id: str, slot_kst: datetime) -> None:
     client.pages.update(
         page_id=page_id,
         properties={
-            "Scheduled At": {"date": {"start": slot_kst.isoformat()}},
+            "Scheduled At": {"date": {"start": slot_local.isoformat()}},
         },
     )
 
 
 __all__ = [
-    "MIN_LEAD_HOURS",
+    "MIN_LEAD_HOURS_KO",
+    "MIN_LEAD_HOURS_EN",
     "SLOT_HOURS_KST",
+    "SLOT_HOURS_LA",
     "assign_scheduled_at_for_pending",
 ]

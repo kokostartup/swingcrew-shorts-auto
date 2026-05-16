@@ -115,10 +115,21 @@ def _yt_upload_date_to_iso(upload_date: str | None) -> str | None:
         return None
 
 
+def _detect_channel_safe(youtube_id: str) -> str:
+    """YouTube Data API로 channel 자동 감지. 실패 시 'ko' fallback (legacy 호환)."""
+    try:
+        from app.integrations.youtube import detect_channel
+        return detect_channel(youtube_id)
+    except Exception as e:
+        log.warning("ingest.detect_channel_failed", youtube_id=youtube_id, error=str(e))
+        return "ko"
+
+
 def ingest(youtube_id_or_url: str) -> Video:
     """YouTube URL/ID로 영상 다운로드 + SQLite 등록.
 
     Cache: data/samples/<id>.mp4 + SQLite row 둘 다 존재 시 skip.
+    channel은 YouTube API videos.snippet.channelId로 자동 감지 (ko/en).
     """
     youtube_id = _extract_youtube_id(youtube_id_or_url)
     local_path = settings.samples_dir / f"{youtube_id}.mp4"
@@ -129,9 +140,12 @@ def ingest(youtube_id_or_url: str) -> Video:
         if existing is not None and local_path.exists():
             log.info(
                 "ingest.cache_hit",
-                youtube_id=youtube_id, path=str(local_path),
+                youtube_id=youtube_id, channel=existing.channel, path=str(local_path),
             )
             return existing
+
+        channel = _detect_channel_safe(youtube_id)
+        log.info("ingest.channel_detected", youtube_id=youtube_id, channel=channel)
 
         log.info("ingest.fetch_metadata", youtube_id=youtube_id)
         meta = _fetch_metadata(youtube_id)
@@ -157,9 +171,10 @@ def ingest(youtube_id_or_url: str) -> Video:
             duration=duration,
             published_at=published_at,
             internal_id=internal_id,
+            channel=channel,
         )
         log.info(
-            "ingest.done", youtube_id=youtube_id,
+            "ingest.done", youtube_id=youtube_id, channel=channel,
             title=title, duration=duration, internal_id=internal_id,
             path=str(local_path),
         )

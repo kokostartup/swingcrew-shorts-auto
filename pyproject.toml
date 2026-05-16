@@ -44,11 +44,18 @@ dev = [
     "ruff>=0.6.0",
 ]
 
-# CUDA PyTorch (WhisperX 가속용)
+# PyTorch: Windows/Linux는 CUDA 가속 (WhisperX 빠름),
+# macOS는 PyPI 기본 CPU 휠 (cuda 휠 없음 — Mac 개발/검증용).
 [tool.uv.sources]
-torch = { index = "pytorch-cu124" }
-torchaudio = { index = "pytorch-cu124" }
-torchvision = { index = "pytorch-cu124" }
+torch = [
+    { index = "pytorch-cu124", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]
+torchaudio = [
+    { index = "pytorch-cu124", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]
+torchvision = [
+    { index = "pytorch-cu124", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]
 
 [[tool.uv.index]]
 name = "pytorch-cu124"

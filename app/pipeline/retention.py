@@ -30,9 +30,16 @@ def _days_since(published_at: str | None) -> int | None:
         return None
 
 
+def _channel_id_for(channel: str) -> str:
+    """ko/en → settings의 채널 ID."""
+    if channel == "en":
+        return settings.youtube_channel_id_en
+    return settings.youtube_channel_id
+
+
 def _is_channel_match(video: Video) -> bool:
-    """video가 영빈 채널에 속하는지 (Analytics API는 본인 채널만 접근 가능)."""
-    return bool(settings.youtube_channel_id)
+    """video가 등록된 채널(ko 또는 en)에 속하는지."""
+    return bool(_channel_id_for(video.channel))
 
 
 @retry(
@@ -41,14 +48,16 @@ def _is_channel_match(video: Video) -> bool:
     retry=retry_if_exception_type(Exception),
     reraise=False,
 )
-def _query_analytics(youtube_id: str, published_at: str) -> dict[str, Any]:
+def _query_analytics(
+    youtube_id: str, published_at: str, channel: str = "ko",
+) -> dict[str, Any]:
     """YouTube Analytics API 호출 (channel scope)."""
     from app.integrations.youtube import build_analytics_client
 
-    analytics = build_analytics_client()
+    analytics = build_analytics_client(channel)
     end_date = datetime.now(UTC).strftime("%Y-%m-%d")
     return analytics.reports().query(  # type: ignore[no-any-return]
-        ids=f"channel=={settings.youtube_channel_id}",
+        ids=f"channel=={_channel_id_for(channel)}",
         startDate=published_at[:10],
         endDate=end_date,
         metrics="audienceWatchRatio,relativeRetentionPerformance",
@@ -208,7 +217,9 @@ def fetch_retention(video: Video) -> RetentionCurve | None:
         return None
 
     try:
-        resp = _query_analytics(video.youtube_id, video.published_at or "")
+        resp = _query_analytics(
+            video.youtube_id, video.published_at or "", channel=video.channel,
+        )
     except Exception as e:
         log.warning(
             "retention.fetch_failed",

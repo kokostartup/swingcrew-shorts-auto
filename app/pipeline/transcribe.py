@@ -42,11 +42,22 @@ def _torch_load_compat() -> Iterator[None]:
         torch.load = original  # type: ignore[assignment]
 
 
-def _get_asr_model() -> Any:
-    """WhisperX ASR 모델 lazy 로드."""
-    global _asr_model
-    if _asr_model is not None:
-        return _asr_model
+def _language_for_channel(channel: str) -> str:
+    """channel → whisperx language ('ko'/'en'). default config 값(ko)."""
+    if channel == "en":
+        return "en"
+    return settings.whisperx_language
+
+
+# ASR 모델은 language별로 별도 로드. dict[language] = model.
+_asr_models: dict[str, Any] = {}
+
+
+def _get_asr_model(language: str) -> Any:
+    """WhisperX ASR 모델 lazy 로드 (language별 별도 캐시)."""
+    cached = _asr_models.get(language)
+    if cached is not None:
+        return cached
 
     import whisperx
 
@@ -55,16 +66,18 @@ def _get_asr_model() -> Any:
         model=settings.whisperx_model,
         device=settings.whisperx_device,
         compute_type=settings.whisperx_compute_type,
+        language=language,
     )
     with _torch_load_compat():
-        _asr_model = whisperx.load_model(
+        model = whisperx.load_model(
             settings.whisperx_model,
             device=settings.whisperx_device,
             compute_type=settings.whisperx_compute_type,
-            language=settings.whisperx_language,
+            language=language,
         )
-    log.info("transcribe.asr_model_loaded")
-    return _asr_model
+    _asr_models[language] = model
+    log.info("transcribe.asr_model_loaded", language=language)
+    return model
 
 
 def _get_align_model(language: str, device: str) -> tuple[Any, Any]:
@@ -86,14 +99,14 @@ def _get_align_model(language: str, device: str) -> tuple[Any, Any]:
     return _align_cache[key]
 
 
-def _run_whisperx(audio_path: Path) -> dict:
+def _run_whisperx(audio_path: Path, language: str) -> dict:
     """WhisperX 전체 pipeline: load_audio → transcribe → align."""
     import whisperx
 
     audio = whisperx.load_audio(str(audio_path))
-    asr = _get_asr_model()
+    asr = _get_asr_model(language)
 
-    log.info("transcribe.asr_run_start", path=str(audio_path))
+    log.info("transcribe.asr_run_start", path=str(audio_path), language=language)
     raw = asr.transcribe(audio, batch_size=settings.whisperx_batch_size)
     log.info(
         "transcribe.asr_run_done",
@@ -102,7 +115,7 @@ def _run_whisperx(audio_path: Path) -> dict:
     )
 
     align_model, align_meta = _get_align_model(
-        settings.whisperx_language, settings.whisperx_device,
+        language, settings.whisperx_device,
     )
 
     log.info("transcribe.align_run_start")
@@ -166,7 +179,8 @@ def transcribe(video: Video) -> Transcript:
         )
 
     t0 = time.time()
-    raw = _run_whisperx(video.local_path)
+    language = _language_for_channel(video.channel)
+    raw = _run_whisperx(video.local_path, language)
     transcript = _dict_to_transcript(raw)
     elapsed = time.time() - t0
 

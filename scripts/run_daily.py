@@ -111,28 +111,38 @@ def main(dry_run: bool) -> None:
         click.echo("(dry-run mode)")
         return
 
-    click.echo("Step 1/7: 노션 → SQLite sync (영빈 토글/수정 반영)")
-    counts = poll_status_from_notion()
-    click.echo(
-        f"  approved={counts['approved']} rejected={counts['rejected']} "
-        f"scheduled_synced={counts['scheduled_synced']} "
-        f"scene_overridden={counts['scene_overridden']} "
-        f"time_overridden={counts['time_overridden']}",
-    )
+    click.echo("Step 1/7: 노션 → SQLite sync (영빈 토글/수정 반영) — ko + en")
+    for ch in ("ko", "en"):
+        try:
+            counts = poll_status_from_notion(channel=ch)
+            click.echo(
+                f"  [{ch}] approved={counts['approved']} rejected={counts['rejected']} "
+                f"scheduled_synced={counts['scheduled_synced']} "
+                f"scene_overridden={counts['scene_overridden']} "
+                f"time_overridden={counts['time_overridden']}",
+            )
+        except Exception as e:
+            click.echo(f"  [{ch}] poll skip: {e}")
 
-    click.echo("Step 2/7: ffmpeg + Gemini 메타 + 노션 Title/Description push")
+    click.echo("Step 2/7: ffmpeg + Gemini 메타 + 노션 Title/Description push (ko + en)")
     generated = process_approved()
     click.echo(f"  generated: {generated}")
 
-    click.echo("Step 3/7: Scheduled At 자동 슬롯 할당 (24h+ 후 빈 슬롯)")
-    assigned = assign_scheduled_at_for_pending()
-    click.echo(f"  scheduled: {assigned}")
+    click.echo("Step 3/7: Scheduled At 자동 슬롯 할당 — ko KST 4슬롯 + en LA 2슬롯")
+    total_assigned = 0
+    for ch in ("ko", "en"):
+        try:
+            a = assign_scheduled_at_for_pending(channel=ch)
+            click.echo(f"  [{ch}] scheduled: {a}")
+            total_assigned += a
+        except Exception as e:
+            click.echo(f"  [{ch}] schedule skip: {e}")
 
-    click.echo("Step 4/7: 멀티 플랫폼 게시 (R2 + YouTube + Buffer)")
+    click.echo("Step 4/7: 게시 (ko: YouTube + R2; en: YouTube native scheduling — slot cron 불필요)")
     published = publish_ready()
     click.echo(f"  published: {published}")
 
-    click.echo("Step 5/7: 자동 거절 (7일 ✅ 안 받은 후보)")
+    click.echo("Step 5/7: 자동 거절 (7일 ✅ 안 받은 후보 — ko만 해당, en은 즉시 approved)")
     rejected = auto_reject_stale(max_age_days=7)
     click.echo(f"  rejected: {rejected}")
 

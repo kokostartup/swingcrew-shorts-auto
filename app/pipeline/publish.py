@@ -54,12 +54,12 @@ def _build_buffer_text(meta: PublishMeta) -> str:
 
 
 def _resolve_meta(
-    row: sqlite3.Row, page_id: str, moment: MagicMoment,
+    row: sqlite3.Row, page_id: str, moment: MagicMoment, channel: str = "ko",
 ) -> PublishMeta | None:
     """메타 결정 우선순위:
     1. SQLite publish_meta_json (process_approved에서 Gemini 생성)
     2. 노션 페이지 Title/Description (영빈 override) — 있으면 base에 덮어쓰기
-    3. 둘 다 없으면 즉시 Gemini fallback
+    3. 둘 다 없으면 즉시 Gemini fallback (channel별 프롬프트)
     """
     base: PublishMeta | None = None
     raw = row["publish_meta_json"]
@@ -79,7 +79,7 @@ def _resolve_meta(
     if base is None:
         # SQLite 비어있음 → Gemini 즉시 생성
         try:
-            base = generate_publish_meta(moment)
+            base = generate_publish_meta(moment, channel=channel)
         except Exception as e:
             log.warning("publish.meta_gen_failed", error=str(e))
             return None
@@ -139,6 +139,7 @@ def _publish_one(
     generated_path = row["generated_path"]
     youtube_id = row["youtube_id"]
     scheduled_at = row["scheduled_at"]
+    channel = row["channel"] if "channel" in row.keys() else "ko"
 
     if not generated_path or not Path(generated_path).exists():
         _mark_error(conn, short_id, page_id, "generated_path_missing")
@@ -155,7 +156,8 @@ def _publish_one(
         _mark_error(conn, short_id, page_id, "moment_not_in_cache")
         return False
 
-    # 1. R2 업로드.
+    # 1. R2 업로드. EN 채널은 FB/IG/Threads 게시 안 하지만, R2는 catch-up + Buffer
+    #    수동 게시 시에도 쓸 수 있으므로 일관성 위해 동일하게 업로드.
     try:
         public_url = _upload_r2(internal_id, Path(generated_path))
     except Exception as e:
@@ -165,14 +167,14 @@ def _publish_one(
 
     # 2. 메타 결정: SQLite publish_meta_json (process_approved 시점 Gemini 생성) +
     #    노션 Title/Description override (영빈 수정 우선).
-    meta = _resolve_meta(row, page_id, moment)
+    meta = _resolve_meta(row, page_id, moment, channel=channel)
     if meta is None:
         _mark_error(conn, short_id, page_id, "publish_meta_unresolved")
         return False
 
     published_urls: dict[str, str] = {}
 
-    # 3. YouTube 예약 업로드.
+    # 3. YouTube 예약 업로드 (channel별 OAuth — 영어 채널은 별도 token).
     try:
         publish_at_utc = _scheduled_at_to_utc_iso(scheduled_at)
         yt_video_id = youtube_upload(
@@ -181,10 +183,11 @@ def _publish_one(
             description=meta.description,
             tags=meta.tags,
             publish_at_utc=publish_at_utc,
+            channel=channel,
         )
         published_urls["youtube"] = youtube_video_url(yt_video_id)
     except Exception as e:
-        log.warning("publish.youtube_failed", short_id=short_id, error=str(e))
+        log.warning("publish.youtube_failed", short_id=short_id, channel=channel, error=str(e))
         _mark_error(conn, short_id, page_id, f"youtube_upload_failed: {e}")
         return False
 

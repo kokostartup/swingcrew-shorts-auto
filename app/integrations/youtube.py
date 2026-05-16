@@ -20,7 +20,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
 ]
 
-_credentials: Credentials | None = None
+# channel별 credentials 캐시. ko/en 동시 사용 가능 (예: ingest는 ko로 detect 호출,
+# upload는 영상 channel로).
+_credentials_cache: dict[str, Credentials] = {}
 
 
 def _client_config() -> dict[str, Any]:
@@ -39,17 +41,27 @@ def _client_config() -> dict[str, Any]:
     }
 
 
-def get_credentials() -> Credentials:
-    """OAuth credentials 획득. 첫 호출 시 브라우저 인증, 이후 캐시 + refresh."""
-    global _credentials
-    if _credentials is not None and _credentials.valid:
-        return _credentials
+def _token_path_for(channel: str) -> Any:
+    if channel == "en":
+        return settings.youtube_token_path_en
+    return settings.youtube_token_path
+
+
+def get_credentials(channel: str = "ko") -> Credentials:
+    """OAuth credentials 획득. 첫 호출 시 브라우저 인증, 이후 캐시 + refresh.
+
+    channel별로 별도 token 파일 + 캐시. 첫 영어 채널 호출 시 브라우저 인증 1회 필요
+    (영어 채널 Google 계정으로 로그인).
+    """
+    cached = _credentials_cache.get(channel)
+    if cached is not None and cached.valid:
+        return cached
 
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials as OAuthCredentials
     from google_auth_oauthlib.flow import InstalledAppFlow
 
-    token_path = settings.youtube_token_path
+    token_path = _token_path_for(channel)
     creds: OAuthCredentials | None = None
 
     if token_path.exists():
@@ -58,51 +70,81 @@ def get_credentials() -> Credentials:
                 str(token_path), SCOPES,
             )
         except Exception as e:
-            log.warning("youtube.oauth.token_load_failed", error=str(e))
+            log.warning("youtube.oauth.token_load_failed", channel=channel, error=str(e))
             creds = None
 
     if creds and creds.valid:
-        _credentials = creds
+        _credentials_cache[channel] = creds
         return creds
 
     if creds and creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
             token_path.write_text(creds.to_json(), encoding="utf-8")
-            log.info("youtube.oauth.token_refreshed")
-            _credentials = creds
+            log.info("youtube.oauth.token_refreshed", channel=channel)
+            _credentials_cache[channel] = creds
             return creds
         except Exception as e:
-            log.warning("youtube.oauth.refresh_failed", error=str(e))
+            log.warning("youtube.oauth.refresh_failed", channel=channel, error=str(e))
             creds = None
 
     log.info(
         "youtube.oauth.browser_required",
-        message="브라우저 인증 필요. 5분 안에 Google 로그인 + 권한 부여 완료하세요.",
+        channel=channel,
+        message=f"[{channel}] 브라우저 인증 필요. 5분 안에 Google 로그인 + 권한 부여 완료.",
     )
     flow = InstalledAppFlow.from_client_config(_client_config(), SCOPES)
     creds = flow.run_local_server(port=0, open_browser=True)
     token_path.parent.mkdir(parents=True, exist_ok=True)
     token_path.write_text(creds.to_json(), encoding="utf-8")
-    log.info("youtube.oauth.token_saved", path=str(token_path))
-    _credentials = creds
+    log.info("youtube.oauth.token_saved", channel=channel, path=str(token_path))
+    _credentials_cache[channel] = creds
     return creds
 
 
-def build_data_client() -> Any:
+def build_data_client(channel: str = "ko") -> Any:
     """YouTube Data API v3 client (videos.list, search.list 등)."""
     from googleapiclient.discovery import build
 
-    return build("youtube", "v3", credentials=get_credentials(), cache_discovery=False)
+    return build(
+        "youtube", "v3",
+        credentials=get_credentials(channel), cache_discovery=False,
+    )
 
 
-def build_analytics_client() -> Any:
+def build_analytics_client(channel: str = "ko") -> Any:
     """YouTube Analytics API v2 client (audienceWatchRatio 등)."""
     from googleapiclient.discovery import build
 
     return build(
         "youtubeAnalytics", "v2",
-        credentials=get_credentials(), cache_discovery=False,
+        credentials=get_credentials(channel), cache_discovery=False,
+    )
+
+
+def detect_channel(video_id: str) -> str:
+    """YouTube video_id → channel 'ko'/'en'. youtube_api_key (public read)로 호출.
+
+    config.youtube_channel_id (한국) / youtube_channel_id_en (영어) 매핑 기반.
+    매칭 안 되면 ValueError.
+    """
+    if not settings.youtube_api_key:
+        raise RuntimeError("YOUTUBE_API_KEY 미설정 — channel 자동 감지 불가.")
+    from googleapiclient.discovery import build
+
+    client = build("youtube", "v3", developerKey=settings.youtube_api_key, cache_discovery=False)
+    resp = client.videos().list(part="snippet", id=video_id).execute()
+    items = resp.get("items", [])
+    if not items:
+        raise ValueError(f"YouTube video {video_id} not found")
+    cid = items[0]["snippet"]["channelId"]
+    if cid == settings.youtube_channel_id:
+        return "ko"
+    if cid == settings.youtube_channel_id_en:
+        return "en"
+    raise ValueError(
+        f"video {video_id} belongs to channel {cid} — not in ko/en mapping. "
+        f"config의 youtube_channel_id (ko) / youtube_channel_id_en (en) 확인."
     )
 
 
@@ -118,16 +160,18 @@ def upload_short(
     tags: list[str] | None = None,
     publish_at_utc: str,
     category_id: str = "17",  # Sports
+    channel: str = "ko",
 ) -> str:
     """YouTube에 영상을 private으로 업로드 + publishAt 예약 → video_id 반환.
 
-    publish_at_utc: ISO 8601 UTC (예: "2026-05-15T09:00:00Z"). 영빈 Scheduled At(KST)을
-    UTC로 변환한 값. publishAt 시간에 YouTube가 자동 public 전환.
+    publish_at_utc: ISO 8601 UTC (예: "2026-05-15T09:00:00Z"). publishAt 시간에
+    YouTube가 자동 public 전환.
+    channel: 'ko' (한국) / 'en' (영어). channel별 OAuth credentials로 업로드.
     """
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaFileUpload
 
-    client = build_data_client()
+    client = build_data_client(channel)
     body = {
         "snippet": {
             "title": title[:100],  # YouTube 제목 100자 한도
@@ -168,14 +212,14 @@ def video_url(video_id: str) -> str:
     return f"https://youtu.be/{video_id}"
 
 
-def delete_video(video_id: str) -> bool:
+def delete_video(video_id: str, channel: str = "ko") -> bool:
     """YouTube video 삭제 (private/scheduled 영상 교체 시 사용).
 
     Returns: True if deleted, False if not found (404). 다른 에러는 raise.
     """
     from googleapiclient.errors import HttpError
 
-    client = build_data_client()
+    client = build_data_client(channel)
     try:
         client.videos().delete(id=video_id).execute()
         log.info("youtube.delete_done", video_id=video_id)
@@ -188,14 +232,14 @@ def delete_video(video_id: str) -> bool:
 
 
 def list_channel_uploads(
-    channel_id: str, max_results: int = 50,
+    channel_id: str, max_results: int = 50, channel: str = "ko",
 ) -> list[dict[str, Any]]:
     """채널 uploads playlist에서 최신 N개 영상 메타.
 
     반환: [{video_id, title, description, published_at}, ...]
     description은 일부만 (snippet에서 잘림 가능). 정확한 ID 추출은 ingest에서 다시.
     """
-    client = build_data_client()
+    client = build_data_client(channel)
     ch_resp = client.channels().list(
         part="contentDetails", id=channel_id,
     ).execute()
@@ -237,6 +281,8 @@ __all__ = [
     "YouTubeUploadError",
     "build_analytics_client",
     "build_data_client",
+    "delete_video",
+    "detect_channel",
     "get_credentials",
     "list_channel_uploads",
     "upload_short",

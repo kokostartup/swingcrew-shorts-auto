@@ -38,45 +38,54 @@ class NotionAPIError(RuntimeError):
 
 
 _client: Any = None
-_data_source_id: str | None = None
+# channel별 data source ID 캐시 (ko/en).
+_data_source_ids: dict[str, str] = {}
+
+
+def _db_id_for(channel: str) -> str:
+    """channel('ko'/'en') → 노션 DB ID."""
+    if channel == "en":
+        if not settings.notion_shorts_db_id_en:
+            raise NotionAPIError("NOTION_SHORTS_DB_ID_EN 미설정. .env 확인.")
+        return settings.notion_shorts_db_id_en
+    if not settings.notion_shorts_db_id:
+        raise NotionAPIError("NOTION_SHORTS_DB_ID 미설정. .env 확인.")
+    return settings.notion_shorts_db_id
 
 
 def _get_client() -> Any:
-    """notion-client lazy init."""
+    """notion-client lazy init. 토큰은 ko/en 공유."""
     global _client
     if _client is not None:
         return _client
     if not settings.notion_token:
         raise NotionAPIError("NOTION_TOKEN 미설정. .env 확인.")
-    if not settings.notion_shorts_db_id:
-        raise NotionAPIError("NOTION_SHORTS_DB_ID 미설정. .env 확인.")
     from notion_client import Client
 
     _client = Client(auth=settings.notion_token)
     return _client
 
 
-def _get_data_source_id() -> str:
-    """첫 data source ID lazy resolve + 모듈 캐시.
-
-    Notion 2025-09 API부터 query는 data_source_id 기반. 영빈 DB는 single-source.
-    """
-    global _data_source_id
-    if _data_source_id is not None:
-        return _data_source_id
+def _get_data_source_id(channel: str = "ko") -> str:
+    """첫 data source ID lazy resolve + channel별 캐시."""
+    cached = _data_source_ids.get(channel)
+    if cached is not None:
+        return cached
+    db_id = _db_id_for(channel)
     client = _get_client()
     try:
-        resp = client.databases.retrieve(database_id=settings.notion_shorts_db_id)
+        resp = client.databases.retrieve(database_id=db_id)
     except Exception as e:
         raise NotionAPIError(f"databases.retrieve failed: {e}") from e
     sources = resp.get("data_sources") or []
     if not sources:
         raise NotionAPIError(
-            f"DB {settings.notion_shorts_db_id}에 data_sources 없음 — schema 확인.",
+            f"DB {db_id}에 data_sources 없음 — schema 확인.",
         )
-    _data_source_id = str(sources[0]["id"])
-    log.info("notion.data_source_resolved", data_source_id=_data_source_id)
-    return _data_source_id
+    ds_id = str(sources[0]["id"])
+    _data_source_ids[channel] = ds_id
+    log.info("notion.data_source_resolved", channel=channel, data_source_id=ds_id)
+    return ds_id
 
 
 def _smpte(seconds: float, fps: int = 30) -> str:
@@ -119,16 +128,20 @@ def _split_hook(hook_text: str) -> tuple[str | None, str | None]:
 
 
 def _moment_properties(
-    video: Video, moment: MagicMoment, short_internal_id: str | None = None,
+    video: Video,
+    moment: MagicMoment,
+    short_internal_id: str | None = None,
+    initial_status: str = "proposed",
 ) -> dict[str, Any]:
     """MagicMoment → Notion page properties (create 시점 기준 모든 필드).
 
     short_internal_id: 모먼트 단위 ID (예: '26-B002-S04'). 없으면 video.internal_id로 fallback.
+    initial_status: 'proposed' (ko 기본) 또는 'approved' (en — 영빈 ✅ 단계 skip).
     """
     score = moment.final_score if moment.final_score is not None else moment.score
     props: dict[str, Any] = {
         "Hook": {"title": [{"text": {"content": _hook_title(moment)}}]},
-        "Status": {"select": {"name": STATUS_EN_TO_KO["proposed"]}},
+        "Status": {"select": {"name": STATUS_EN_TO_KO[initial_status]}},
         "Source Video": {
             "url": _youtube_timestamp_url(video.youtube_id, moment.start_sec),
         },
@@ -165,17 +178,23 @@ def _moment_properties(
     reraise=True,
 )
 def create_page(
-    video: Video, moment: MagicMoment, short_internal_id: str | None = None,
+    video: Video,
+    moment: MagicMoment,
+    short_internal_id: str | None = None,
+    channel: str = "ko",
+    initial_status: str = "proposed",
 ) -> str:
     """Notion DB에 새 후보 페이지 생성 → page_id 반환.
 
     short_internal_id: 모먼트 단위 ID (예: '26-B002-S04').
+    channel: 'ko'/'en'. en은 영빈 ✅ 단계 skip → initial_status='approved'로 호출.
     """
     client = _get_client()
+    db_id = _db_id_for(channel)
     try:
         resp = client.pages.create(
-            parent={"database_id": settings.notion_shorts_db_id},
-            properties=_moment_properties(video, moment, short_internal_id),
+            parent={"database_id": db_id},
+            properties=_moment_properties(video, moment, short_internal_id, initial_status),
         )
     except Exception as e:
         raise NotionAPIError(f"create_page failed: {e}") from e
@@ -183,8 +202,10 @@ def create_page(
     log.info(
         "notion.page_created",
         page_id=page_id,
+        channel=channel,
         youtube_id=video.youtube_id,
         start_sec=moment.start_sec,
+        status=initial_status,
     )
     return page_id
 
@@ -195,7 +216,7 @@ def create_page(
     retry=retry_if_exception_type(NotionAPIError),
     reraise=True,
 )
-def list_pages_by_status(status_en: str) -> list[dict[str, Any]]:
+def list_pages_by_status(status_en: str, channel: str = "ko") -> list[dict[str, Any]]:
     """특정 상태의 페이지 리스트 (paginated 자동 처리).
 
     반환 항목:
@@ -205,7 +226,7 @@ def list_pages_by_status(status_en: str) -> list[dict[str, Any]]:
         raise ValueError(f"Unknown status: {status_en}")
     status_ko = STATUS_EN_TO_KO[status_en]
     client = _get_client()
-    data_source_id = _get_data_source_id()
+    data_source_id = _get_data_source_id(channel)
     out: list[dict[str, Any]] = []
     next_cursor: str | None = None
     while True:

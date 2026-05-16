@@ -42,6 +42,27 @@ YouTube Shorts / Instagram Reels / TikTok 모두에 공통으로 쓸 메타데�
 """
 
 
+SYSTEM_INSTRUCTION_EN = """You are the social copywriter for SwingCrew, an English-language golf channel.
+Generate metadata for YouTube Shorts (EN channel only — no IG/TikTok/FB on EN channel).
+
+Rules:
+- English only. Concise, actionable, hook-driven tone.
+- Channel name: only "SwingCrew". Never mention any presenter/pro personal name.
+- Title: ≤ 100 chars. Compress the video's core message. NO hashtags (#) in title.
+- Description: 2-4 sentences. Summarize the video + friendly practical tone. End with blank line + 5-10 hashtags (`#golf #golfswing #golftips #shorts ...`).
+- Tags: for YouTube videos.insert. 10-15 English keywords. No # — just words.
+- Hashtags: 5-10 entries with # prefix (e.g., #golf, #golfswing, #shorts).
+
+Response JSON schema:
+{
+  "title": "string (≤ 100 chars)",
+  "description": "string (≤ 2000 chars, ending with hashtags)",
+  "tags": ["string", ...],
+  "hashtags": ["#string", ...]
+}
+"""
+
+
 def _strip_host_name(s: str) -> str:
     """진행자 이름 "영빈" 관련 표현 제거 — 채널명은 "스윙크루"만 노출.
 
@@ -55,7 +76,18 @@ def _strip_host_name(s: str) -> str:
     return cleaned.strip()
 
 
-def _build_user_prompt(moment: MagicMoment) -> str:
+def _build_user_prompt(moment: MagicMoment, channel: str = "ko") -> str:
+    if channel == "en":
+        return f"""
+Generate SNS metadata for the following magic moment:
+
+copy1: {moment.copy1}
+copy2: {moment.copy2}
+hook: {moment.hook_text}
+reasoning: {moment.reasoning}
+
+Produce title/description/tags/hashtags for SwingCrew (English golf channel) tone.
+"""
     return f"""
 다음 매직 모먼트로 SNS 메타데이터 생성:
 
@@ -68,31 +100,44 @@ reasoning: {moment.reasoning}
 """
 
 
-def generate_publish_meta(moment: MagicMoment) -> PublishMeta:
-    """모먼트 → SNS 메타 (제목/설명/태그/해시태그)."""
-    prompt = _build_user_prompt(moment)
+def generate_publish_meta(
+    moment: MagicMoment, channel: str = "ko",
+) -> PublishMeta:
+    """모먼트 → SNS 메타 (제목/설명/태그/해시태그). channel별 프롬프트."""
+    prompt = _build_user_prompt(moment, channel=channel)
+    sys_instruction = SYSTEM_INSTRUCTION_EN if channel == "en" else SYSTEM_INSTRUCTION
     raw = generate_json(
-        system_instruction=SYSTEM_INSTRUCTION,
+        system_instruction=sys_instruction,
         prompt=prompt,
         temperature=settings.gemini_temperature,
         model_name=settings.gemini_model,
     )
     # Title에서 해시태그(#xxx) 토큰 강제 제거 — Gemini가 prompt 어기는 케이스 안전망.
     title_clean = re.sub(r"\s*#\S+", "", str(raw.get("title", ""))).strip()
-    # "영빈" 진행자 이름 강제 제거 (채널명 "스윙크루"만 노출). prompt 어기는 케이스 안전망.
-    title_clean = _strip_host_name(title_clean)
-    desc_clean = _strip_host_name(str(raw.get("description", "")))
-    hashtags_clean = [
-        t for t in (raw.get("hashtags") or []) if "영빈" not in str(t)
-    ]
+    desc_raw = str(raw.get("description", ""))
+    # 한국 채널만 진행자 이름 sanitization (영어 채널은 한국 이름 등장 가능성 낮음).
+    if channel == "ko":
+        title_clean = _strip_host_name(title_clean)
+        desc_clean = _strip_host_name(desc_raw)
+        hashtags_clean = [
+            t for t in (raw.get("hashtags") or []) if "영빈" not in str(t)
+        ]
+        tags_clean = [
+            str(t) for t in (raw.get("tags") or []) if "영빈" not in str(t)
+        ]
+    else:
+        desc_clean = desc_raw
+        hashtags_clean = list(raw.get("hashtags") or [])
+        tags_clean = [str(t) for t in (raw.get("tags") or [])]
     meta = PublishMeta(
         title=title_clean[:100],
         description=desc_clean[:2000],
-        tags=[str(t) for t in (raw.get("tags") or []) if "영빈" not in str(t)][:30],
+        tags=tags_clean[:30],
         hashtags=[str(t) for t in hashtags_clean][:15],
     )
     log.info(
         "publish_meta.generated",
+        channel=channel,
         title_len=len(meta.title),
         desc_len=len(meta.description),
         tags=len(meta.tags),

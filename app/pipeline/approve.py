@@ -395,7 +395,7 @@ def process_approved() -> int:
             meta_title: str | None = None
             meta_description: str | None = None
             try:
-                meta = generate_publish_meta(moment)
+                meta = generate_publish_meta(moment, channel=video.channel)
                 meta_json = meta.model_dump_json()
                 meta_title = meta.title
                 meta_description = meta.description

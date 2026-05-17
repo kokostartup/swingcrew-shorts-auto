@@ -118,7 +118,7 @@ def _face_centered_dynamic(
             # 2) scale 1080:720 후 1080×1350 영역 center pad (위/아래 315px씩)
             parts.append(
                 f"[v{i}]trim=start={s_start:.3f}:end={e_end:.3f},"
-                f"setpts=PTS-STARTPTS,"
+                f"setpts=PTS-STARTPTS,fps=30000/1001,"
                 f"crop=ih*1.5:ih:(iw-ih*1.5)/2:0,"
                 f"scale={CANVAS_W}:-2,"
                 f"pad={CANVAS_W}:{VIDEO_H}:(ow-iw)/2:(oh-ih)/2:color=black,"
@@ -128,7 +128,7 @@ def _face_centered_dynamic(
             crop_x = _crop_x_pixel(cx, src_w, crop_w)
             parts.append(
                 f"[v{i}]trim=start={s_start:.3f}:end={e_end:.3f},"
-                f"setpts=PTS-STARTPTS,"
+                f"setpts=PTS-STARTPTS,fps=30000/1001,"
                 f"crop={crop_w}:{src_h}:{crop_x}:0,"
                 f"scale={CANVAS_W}:{VIDEO_H}:force_original_aspect_ratio=increase,"
                 f"crop={CANVAS_W}:{VIDEO_H},setsar=1[s{i}]"

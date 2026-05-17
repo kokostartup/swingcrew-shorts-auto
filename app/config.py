@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # Phase 2: ingest + transcribe
     samples_dir: Path = Path("data/samples")
     transcripts_dir: Path = Path("data/transcripts")
+    # yt-dlp가 YouTube 봇 차단 우회용 브라우저 cookies 사용. 빈 값이면 옵션 안 붙임.
+    # 예: 'chrome', 'safari', 'firefox'. macOS는 처음 호출 시 Keychain 권한 prompt.
+    yt_dlp_browser_cookies: str = ""
     whisperx_model: str = "large-v3"
     whisperx_device: str = "cuda"
     whisperx_language: str = "ko"  # 한국 채널 기본. 영어 채널은 자동으로 'en' 사용.

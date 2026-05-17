@@ -58,6 +58,12 @@ def _extract_youtube_id(s: str) -> str:
     raise ValueError(f"Cannot extract YouTube ID from: {s}")
 
 
+def _ytdlp_cookies_args() -> list[str]:
+    """settings.yt_dlp_browser_cookies 설정 시 --cookies-from-browser 옵션 반환."""
+    browser = (settings.yt_dlp_browser_cookies or "").strip()
+    return ["--cookies-from-browser", browser] if browser else []
+
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(min=2, max=20),
@@ -68,6 +74,7 @@ def _fetch_metadata(youtube_id: str) -> dict[str, Any]:
     url = f"https://www.youtube.com/watch?v={youtube_id}"
     cmd = [
         "yt-dlp", "--no-playlist", "--skip-download",
+        *_ytdlp_cookies_args(),
         "--dump-json", "--", url,
     ]
     result = subprocess.run(
@@ -89,6 +96,7 @@ def _download(youtube_id: str, output: Path) -> None:
     cmd = [
         "yt-dlp",
         "--no-playlist",
+        *_ytdlp_cookies_args(),
         "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]",
         "--merge-output-format", "mp4",
         "-o", str(output),

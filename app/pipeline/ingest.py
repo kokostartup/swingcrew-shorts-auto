@@ -75,6 +75,9 @@ def _fetch_metadata(youtube_id: str) -> dict[str, Any]:
     cmd = [
         "yt-dlp", "--no-playlist", "--skip-download",
         *_ytdlp_cookies_args(),
+        # n challenge solver(deno/EJS) 없어도 metadata는 추출. format URL 불필요
+        # (다운로드는 별도 _download에서 처리).
+        "--ignore-no-formats-error",
         "--dump-json", "--", url,
     ]
     result = subprocess.run(

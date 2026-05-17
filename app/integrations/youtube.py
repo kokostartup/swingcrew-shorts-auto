@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 SCOPES = [
+    "https://www.googleapis.com/auth/youtube",  # full scope — delete_video 권한 포함
     "https://www.googleapis.com/auth/youtube.readonly",
     "https://www.googleapis.com/auth/yt-analytics.readonly",
     "https://www.googleapis.com/auth/youtube.upload",

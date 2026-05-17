@@ -24,7 +24,8 @@
       "PowerShell(uv lock)",
       "PowerShell(ffprobe:*)",
       "PowerShell(Get-ChildItem:*)",
-      "PowerShell(Test-Path:*)"
+      "PowerShell(Test-Path:*)",
+      "Bash(git log:*)"
     ],
     "deny": [
       "Bash(rm -rf /)",

@@ -25,8 +25,11 @@ data/*.db-journal
 *.webm
 
 # OAuth + retention 캐시
-data/youtube_token.json
+data/youtube_token*.json
 data/retention/
+
+# Cloudflare Wrangler 빌드 캐시
+infra/cloudflare-worker/.wrangler/
 
 # 캐시 (영빈 PC만, GitHub Actions 불필요)
 data/samples/

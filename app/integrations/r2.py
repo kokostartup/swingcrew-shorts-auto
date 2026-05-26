@@ -100,4 +100,23 @@ def object_exists(key: str) -> bool:
         return False
 
 
-__all__ = ["R2Error", "object_exists", "upload_video"]
+def delete_object(key: str) -> bool:
+    """R2 mp4 삭제. 존재 안 하면 False, 삭제 성공이면 True.
+
+    FB/IG/Threads 게시 완료 → R2 fetch source 불필요 → 삭제로 스토리지 정리.
+    """
+    client = _get_client()
+    try:
+        client.head_object(Bucket=settings.r2_bucket, Key=key)
+    except Exception:
+        log.info("r2.delete_skip_not_found", key=key)
+        return False
+    try:
+        client.delete_object(Bucket=settings.r2_bucket, Key=key)
+    except Exception as e:
+        raise R2Error(f"delete failed: {e}") from e
+    log.info("r2.delete_done", bucket=settings.r2_bucket, key=key)
+    return True
+
+
+__all__ = ["R2Error", "delete_object", "object_exists", "upload_video"]

@@ -41,9 +41,20 @@ class SocialPostError(RuntimeError):
     """게시 실패."""
 
 
-def _post(url: str, data: dict[str, Any]) -> dict[str, Any]:
-    """공통 POST helper. 4xx/5xx 시 SocialPostError raise (error body 포함)."""
-    r = httpx.post(url, data=data, timeout=60)
+def _post(url: str, data: dict[str, Any], timeout: float = 180.0) -> dict[str, Any]:
+    """공통 POST helper. 4xx/5xx + 네트워크 예외 모두 SocialPostError로 변환.
+
+    httpx의 raw exception (ReadTimeout/ConnectError 등)을 잡지 않으면 publish_socials의
+    `except SocialPostError` 못 잡아 script 전체 die — 다른 platform 처리 + 노션 update
+    모두 누락. 반드시 변환.
+
+    FB `/videos` 같은 Meta server-side fetch는 R2 download + 인코딩 시간 누적으로
+    응답 늦는 경우 있음 → timeout 기본 180s.
+    """
+    try:
+        r = httpx.post(url, data=data, timeout=timeout)
+    except httpx.HTTPError as e:
+        raise SocialPostError(f"http_error: {type(e).__name__}: {e}") from e
     if r.status_code >= 400:
         try:
             err = r.json().get("error", {})
@@ -58,7 +69,10 @@ def _post(url: str, data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _get(url: str, params: dict[str, Any]) -> dict[str, Any]:
-    r = httpx.get(url, params=params, timeout=30)
+    try:
+        r = httpx.get(url, params=params, timeout=30)
+    except httpx.HTTPError as e:
+        raise SocialPostError(f"http_error: {type(e).__name__}: {e}") from e
     if r.status_code >= 400:
         raise SocialPostError(f"{r.status_code}: {r.text[:300]}")
     return r.json()

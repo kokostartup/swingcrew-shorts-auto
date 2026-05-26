@@ -26,11 +26,12 @@ def assert_video_meta(
     *,
     expected_dur: float,
     tolerance: float = 0.5,
-    size_mb_per_90s: float = 25.0,
+    size_mb_per_90s: float = 30.0,
 ) -> None:
     """1080×1920 / H.264+AAC / 30fps / duration·size 검증.
 
     size_mb_per_90s: 90초 기준 최대 MB. 짧은 클립도 mp4 헤더 비용을 위해 최소 3MB 허용.
+    움직임 많은 골프 스윙 클립은 crf22 + 30fps 기준 ~28 MB/90s까지 정상 — 30으로 여유.
     """
     meta = ffprobe_meta(path)
     video = next((s for s in meta["streams"] if s["codec_type"] == "video"), None)

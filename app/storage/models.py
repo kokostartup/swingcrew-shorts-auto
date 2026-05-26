@@ -1,4 +1,5 @@
 """Pydantic 모델 (Phase 2: ingest + transcribe)."""
+
 from pathlib import Path  # noqa: F401  (Video.local_path 사용)
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -101,13 +102,9 @@ class MagicMoment(BaseModel):
     @model_validator(mode="after")
     def _check_time_range(self) -> "MagicMoment":
         if self.end_sec <= self.start_sec:
-            raise ValueError(
-                f"end_sec ({self.end_sec}) must be > start_sec ({self.start_sec})"
-            )
-        if self.end_sec - self.start_sec > 90:
-            raise ValueError(
-                f"duration ({self.end_sec - self.start_sec}s) must be ≤ 90s"
-            )
+            raise ValueError(f"end_sec ({self.end_sec}) must be > start_sec ({self.start_sec})")
+        if self.end_sec - self.start_sec > 80:
+            raise ValueError(f"duration ({self.end_sec - self.start_sec}s) must be ≤ 80s")
         return self
 
 

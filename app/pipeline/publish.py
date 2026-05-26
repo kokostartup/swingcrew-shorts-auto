@@ -156,14 +156,15 @@ def _publish_one(
         _mark_error(conn, short_id, page_id, "moment_not_in_cache")
         return False
 
-    # 1. R2 업로드. EN 채널은 FB/IG/Threads 게시 안 하지만, R2는 catch-up + Buffer
-    #    수동 게시 시에도 쓸 수 있으므로 일관성 위해 동일하게 업로드.
-    try:
-        public_url = _upload_r2(internal_id, Path(generated_path))
-    except Exception as e:
-        log.warning("publish.r2_upload_failed", short_id=short_id, error=str(e))
-        _mark_error(conn, short_id, page_id, f"r2_upload_failed: {e}")
-        return False
+    # 1. R2 업로드 — ko 채널만. EN 채널은 YouTube only(FB/IG/Threads 안 함)이라 R2 fetch
+    #    수요 0 → 업로드 자체 skip (스토리지/시간 절약).
+    if channel == "ko":
+        try:
+            _upload_r2(internal_id, Path(generated_path))
+        except Exception as e:
+            log.warning("publish.r2_upload_failed", short_id=short_id, error=str(e))
+            _mark_error(conn, short_id, page_id, f"r2_upload_failed: {e}")
+            return False
 
     # 2. 메타 결정: SQLite publish_meta_json (process_approved 시점 Gemini 생성) +
     #    노션 Title/Description override (영빈 수정 우선).

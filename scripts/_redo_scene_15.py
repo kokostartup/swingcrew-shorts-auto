@@ -91,9 +91,12 @@ def _redo_one(conn: sqlite3.Connection, row: sqlite3.Row) -> str:
     if moment is None:
         return f"{iid}: cache moment not found"
 
-    # face_segments tuple list 변환
-    face_segs_tuple = (
-        [(float(s), float(e), float(c)) for s, e, c in new_segments]
+    # face_segments tuple list 변환 (4-tuple).
+    face_segs_tuple: list[tuple[float, float, float, int]] | None = (
+        [
+            (float(s[0]), float(s[1]), float(s[2]), int(s[3]) if len(s) >= 4 else 1)
+            for s in new_segments
+        ]
         if new_segments else None
     )
 
@@ -105,6 +108,7 @@ def _redo_one(conn: sqlite3.Connection, row: sqlite3.Row) -> str:
         generated_path,
         face_center_x=new_cx,
         face_segments=face_segs_tuple,
+        internal_id=iid,
     )
 
     # 4. 기존 YouTube delete

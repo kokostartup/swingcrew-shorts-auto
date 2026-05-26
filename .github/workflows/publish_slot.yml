@@ -20,6 +20,10 @@ on:
         description: '콤마 구분 internal_id 목록 (지정 시 그 모먼트만 처리, cron 누락 catch-up용)'
         required: false
         default: ''
+      target_platforms:
+        description: '콤마 구분 platform 목록 (facebook,instagram,threads). 지정 시 그 platform만 시도 — 일부 platform만 catch-up할 때 중복 게시 방지'
+        required: false
+        default: ''
 
 jobs:
   publish:
@@ -83,5 +87,6 @@ jobs:
           SKIP_TIME_FILTER: ${{ github.event.inputs.skip_time_filter }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
           TARGET_INTERNAL_IDS: ${{ github.event.inputs.target_internal_ids }}
+          TARGET_PLATFORMS: ${{ github.event.inputs.target_platforms }}
         run: |
           python scripts/publish_socials_from_notion.py

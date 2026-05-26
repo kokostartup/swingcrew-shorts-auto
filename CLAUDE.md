@@ -109,9 +109,10 @@ cron에서 제거** (영빈 결정 2026-05-13): 영빈이 어떤 미드폼을 �
 3. **Scheduled At 자동 할당** — `status='generated'` + `scheduled_at IS NULL`인 행에
    다음 빈 슬롯 할당. 슬롯: 매일 KST 07/11/17/20시, 최소 24h 검토 lead 보장
    (`MIN_LEAD_HOURS=24`). 노션 Scheduled At 컬럼도 동시 업데이트.
-4. **YouTube 예약 게시** — Scheduled At 있는 `status='generated'` 모먼트 → R2 업로드 +
+4. **YouTube 예약 게시** — Scheduled At 있는 `status='generated'` 모먼트 → R2 업로드(ko만) +
    YouTube private + publishAt 예약 → `status='scheduled'`. FB/IG/Threads는 별도 흐름
    (아래 "슬롯 게시 흐름" 참고). TikTok은 Buffer queue로 영빈이 수동 처리.
+   EN 채널은 YouTube only — R2 업로드 자체 skip (FB/IG/Threads/Buffer 안 함).
 5. **자동 거절** — `pushed_at`이 7일 이상 지났는데 영빈이 ✅ 안 한 'proposed'
    모먼트 → 자동 `rejected`.
 6. **Phase 8 calibration** — `calibrate()` 호출. 미드폼 retention spike 분포 +
@@ -141,8 +142,12 @@ FB/IG/Threads는 외부 cron trigger가 필요:
 2. **GitHub Actions** ([publish_slot.yml](.github/workflows/publish_slot.yml)) — workflow_dispatch만,
    schedule 제거됨. `publish_socials_from_notion.py` 실행.
 3. **publish_socials_from_notion.py** — 노션 'scheduled' 페이지 fetch → 현재 시각 ±15분
-   필터 → R2 URL fetch → FB/IG/Threads 게시 → 노션 status='게시' 전환.
+   필터 → R2 URL fetch → FB/IG/Threads 게시 → 노션 status='게시' 전환 →
+   **R2 mp4 자동 삭제** (게시 끝나면 R2 fetch source 불필요 → 스토리지 정리).
 4. **TikTok**: Buffer queue로 영빈 PC에서 publish_ready 직후 수동 추가 (publish_socials에서 제거됨).
+5. **R2 catch-up cleanup**: `scripts/r2_cleanup_published.py` — hook 누락된 published mp4
+   (또는 명시 `--keys`)를 일괄 삭제. `--channel ko` 노션 published 기준, `--channel en`
+   SQLite 기준.
 
 **catch-up trigger** (cron 지연 시):
 ```powershell
@@ -163,7 +168,10 @@ $env:TARGET_INTERNAL_IDS = "26-P002-S04"  # 콤마 구분 여러 개 가능
 - 영빈이 요청한 분기. 미구현된 PRD F1 (percentile 70 score threshold + calibration
   연동)은 Phase 8 학습 루프에서 채울 부분 — 지금은 양적 cap만 작동, 질적 threshold X.
 - NMS: 모먼트 간 시작점 최소 30초 간격 (`gemini_min_gap_sec=30`).
-- 안전장치: moment duration 45~90초 (45 미만 권장 X, 90 초과 reject), 목표 60~78초.
+- 안전장치: moment duration 45~80초 (45 미만 권장 X, 80 초과 reject), 목표 60~75초.
+  80초 cap은 2026-05-21 calibration 분석: 게시 7일+ 26개 sample에서 80초 초과 시
+  평균 views 절반 이하로 급락 (~3,820 vs ~8,300) → analyze prompt + MagicMoment
+  validator 모두 80s로 강화.
 
 ### Gemini start_sec 보정 (analyze.py `_snap_start_sec`)
 Gemini가 transcript의 `[start-end]` 라벨에서 `end`값을 다음 hook 시작으로 잡는

@@ -24,7 +24,7 @@
   - 해상도 (1080×1920)
   - fps (30)
   - 코덱 (H.264 + AAC)
-  - 파일 크기 (≤ 25MB per 90초, duration 비례, 최소 3MB 허용; libx264 crf22 화질 우선 기준)
+  - 파일 크기 (≤ 30MB per 90초, duration 비례, 최소 3MB 허용; libx264 crf22 화질 우선 기준)
   - 총 길이 (요청한 duration ±0.5초)
 
 ## 커버리지 목표

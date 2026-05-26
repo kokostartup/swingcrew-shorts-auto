@@ -31,7 +31,7 @@ class MagicMoment(BaseModel):
     reasoning: str
 
 SYSTEM_INSTRUCTION = """You are SwingCrew의 콘텐츠 분석가. 골프 미드폼 영상의
-transcript에서 90초 이내 숏츠 후보를 5단 구조(hook→문제→인사이트→데모→결과)로
+transcript에서 80초 이내 숏츠 후보를 5단 구조(hook→문제→인사이트→데모→결과)로
 추출한다.
 
 Hook 규칙:

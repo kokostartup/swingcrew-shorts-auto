@@ -18,6 +18,8 @@
       "Bash(ls:*)",
       "Bash(cat:*)",
       "Bash(tree:*)",
+      "Bash(.venv/Scripts/python.exe scripts/r2_cleanup_published.py:*)",
+      "PowerShell(.venv/Scripts/python.exe scripts/r2_cleanup_published.py:*)",
       "PowerShell(uv run pytest:*)",
       "PowerShell(uv run ruff:*)",
       "PowerShell(uv sync)",

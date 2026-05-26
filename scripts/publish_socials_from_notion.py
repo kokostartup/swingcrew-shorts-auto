@@ -23,6 +23,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 from app.config import settings
+from app.integrations import r2
 from app.integrations.notion import (
     _get_client,
     list_pages_by_status,
@@ -59,6 +60,13 @@ TARGET_INTERNAL_IDS: set[str] = (
 # DRY_RUN: True면 모먼트 fetch + 필터 흐름까지만, 실제 social API 호출 skip.
 # Cloudflare Worker→GitHub workflow 통신 검증용 (실제 게시 안 함).
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() in {"1", "true", "yes"}
+
+# TARGET_PLATFORMS: 콤마 구분 facebook/instagram/threads 부분집합. 비어있으면 모두 시도.
+# 특정 platform만 catch-up 시 (예: FB 이미 게시됐는데 IG/Threads만 누락) 중복 게시 방지.
+_platforms_raw = os.environ.get("TARGET_PLATFORMS", "").strip().lower()
+TARGET_PLATFORMS: set[str] = (
+    {x.strip() for x in _platforms_raw.split(",") if x.strip()} if _platforms_raw else set()
+)
 
 
 def _internal_id_from_page(page_id: str) -> str | None:
@@ -113,31 +121,35 @@ def _publish_one_moment(page: dict[str, Any]) -> tuple[bool, dict[str, str]]:
 
     results: dict[str, str] = {}
 
-    # FB
-    try:
-        fb_id = post_facebook_video(r2_url, text)
-        results["facebook"] = facebook_video_url(fb_id)
-    except SocialPostError as e:
-        log.warning("publish_socials.fb_failed", iid=iid, error=str(e))
-        results["facebook"] = f"error:{e}"
+    # TARGET_PLATFORMS 지정 시 그 platform만 시도 (catch-up — 이미 게시된 것 중복 회피).
+    def _enabled(p: str) -> bool:
+        return not TARGET_PLATFORMS or p in TARGET_PLATFORMS
 
-    # IG
-    try:
-        ig_id = post_instagram_reel(r2_url, text)
-        results["instagram"] = instagram_reel_url(ig_id)
-    except SocialPostError as e:
-        log.warning("publish_socials.ig_failed", iid=iid, error=str(e))
-        results["instagram"] = f"error:{e}"
+    if _enabled("facebook"):
+        try:
+            fb_id = post_facebook_video(r2_url, text)
+            results["facebook"] = facebook_video_url(fb_id)
+        except SocialPostError as e:
+            log.warning("publish_socials.fb_failed", iid=iid, error=str(e))
+            results["facebook"] = f"error:{e}"
 
-    # Threads
-    try:
-        th_id = post_threads_video(r2_url, text)
-        results["threads"] = threads_post_url(th_id)
-    except SocialPostError as e:
-        log.warning("publish_socials.threads_failed", iid=iid, error=str(e))
-        results["threads"] = f"error:{e}"
+    if _enabled("instagram"):
+        try:
+            ig_id = post_instagram_reel(r2_url, text)
+            results["instagram"] = instagram_reel_url(ig_id)
+        except SocialPostError as e:
+            log.warning("publish_socials.ig_failed", iid=iid, error=str(e))
+            results["instagram"] = f"error:{e}"
 
-    # 게시 1개라도 성공이면 status='게시'로 전환.
+    if _enabled("threads"):
+        try:
+            th_id = post_threads_video(r2_url, text)
+            results["threads"] = threads_post_url(th_id)
+        except SocialPostError as e:
+            log.warning("publish_socials.threads_failed", iid=iid, error=str(e))
+            results["threads"] = f"error:{e}"
+
+    # 시도된 platform 중 1개라도 성공이면 status='게시'로 전환.
     success = any(not v.startswith("error:") for v in results.values())
     return success, results
 
@@ -147,9 +159,15 @@ def main() -> None:
     print(f"SKIP_TIME_FILTER={SKIP_TIME_FILTER}", flush=True)
     if TARGET_INTERNAL_IDS:
         print(f"TARGET_INTERNAL_IDS={sorted(TARGET_INTERNAL_IDS)}", flush=True)
+    if TARGET_PLATFORMS:
+        print(f"TARGET_PLATFORMS={sorted(TARGET_PLATFORMS)}", flush=True)
 
     pages = list_pages_by_status("scheduled")
-    print(f"scheduled pages from Notion: {len(pages)}", flush=True)
+    # TARGET_INTERNAL_IDS 지정 시 'published' 페이지도 catch-up 대상 (이미 부분 게시된 모먼트의
+    # 누락 platform 보완용). 평상시 cron엔 'scheduled'만.
+    if TARGET_INTERNAL_IDS:
+        pages.extend(list_pages_by_status("published"))
+    print(f"candidate pages from Notion: {len(pages)}", flush=True)
 
     processed = 0
     success = 0
@@ -193,6 +211,17 @@ def main() -> None:
                     log.warning(
                         "publish_socials.notion_update_failed",
                         page_id=page["id"], error=str(e),
+                    )
+            # 모든 social 게시 + 노션 'published' 전환 끝 → R2 mp4 source 불필요 → 삭제.
+            # 삭제 실패해도 게시 자체는 끝났으므로 swallow.
+            iid = _internal_id_from_page(page["id"])
+            if iid:
+                try:
+                    r2.delete_object(f"{iid}.mp4")
+                except Exception as e:
+                    log.warning(
+                        "publish_socials.r2_delete_failed",
+                        iid=iid, error=str(e),
                     )
         else:
             print(f"  FAIL — all platforms errored", flush=True)

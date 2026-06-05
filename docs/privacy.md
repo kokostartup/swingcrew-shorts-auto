@@ -9,25 +9,25 @@ title: Privacy Policy
 
 ## 1. Information We Collect
 
-SwingCrew Shorts Auto ("the Service") collects the following data through TikTok's official OAuth 2.0 flow:
+SwingCrew Shorts Auto ("the Service") collects the following data through TikTok's official OAuth 2.0 flow when a creator authorizes their TikTok account:
 
 - TikTok account identifier (open_id, union_id)
 - OAuth access token and refresh token
-- Basic channel metadata necessary for publishing
+- Basic account metadata necessary for publishing (display name, scope)
 
-The Service does not collect any personal data from TikTok viewers or other users.
+The Service does not collect personal data from TikTok viewers or any users other than the authorizing creator.
 
 ## 2. How We Use Information
 
 Collected data is used solely to:
 
-- Authenticate the Service with TikTok's Content Posting API.
-- Upload video content to the authenticated TikTok account.
+- Authenticate the Service with TikTok's Content Posting API on behalf of the authorizing creator.
+- Upload video content to the authenticated creator account at the creator's request.
 - Refresh expired access tokens automatically.
 
 ## 3. Data Storage
 
-All credentials are stored locally on SwingCrew's operating systems with restricted access. Tokens are not transmitted to any third party except TikTok's official API endpoints.
+All credentials are stored in encrypted form on the creator's own operating system with restricted file access. Tokens are not transmitted to any third party except TikTok's official API endpoints.
 
 ## 4. Data Sharing
 
@@ -35,7 +35,7 @@ We do not sell, rent, or share collected data with third parties. The only exter
 
 ## 5. Data Retention
 
-OAuth tokens are retained until manually revoked or invalidated by TikTok. Users may revoke access at any time via TikTok's app settings.
+OAuth tokens are retained until manually revoked or invalidated by TikTok. Creators may revoke access at any time via TikTok's app settings.
 
 ## 6. Children's Privacy
 

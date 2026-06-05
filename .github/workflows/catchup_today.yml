@@ -1,0 +1,64 @@
+name: catchup_today
+
+# 매일 KST 22:00 (UTC 13:00) 당일 누락된 social 게시 catch-up.
+# Cloudflare Worker cron 또는 publish_slot.yml 누락 시 안전장치.
+# schedule cron은 정각 누락 가능하지만 catch-up은 시각 정확성 무관 (±30분 OK).
+
+on:
+  schedule:
+    - cron: '0 13 * * *'  # UTC 13:00 = KST 22:00
+  workflow_dispatch:  # manual trigger 가능
+
+jobs:
+  catchup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install \
+            httpx \
+            pydantic \
+            pydantic-settings \
+            structlog \
+            tenacity \
+            notion-client \
+            google-api-python-client \
+            google-auth-oauthlib \
+            google-auth-httplib2 \
+            boto3 \
+            click
+
+      - name: Run catchup_today_socials
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_SHORTS_DB_ID: ${{ secrets.NOTION_SHORTS_DB_ID }}
+          NOTION_SHORTS_DB_ID_EN: ${{ secrets.NOTION_SHORTS_DB_ID_EN }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
+          R2_S3_ENDPOINT: ${{ secrets.R2_S3_ENDPOINT }}
+          META_APP_ID: ${{ secrets.META_APP_ID }}
+          META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          INSTAGRAM_APP_ID: ${{ secrets.INSTAGRAM_APP_ID }}
+          INSTAGRAM_APP_SECRET: ${{ secrets.INSTAGRAM_APP_SECRET }}
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          THREADS_APP_ID: ${{ secrets.THREADS_APP_ID }}
+          THREADS_APP_SECRET: ${{ secrets.THREADS_APP_SECRET }}
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+        run: |
+          python scripts/catchup_today_socials.py

@@ -1,4 +1,4 @@
-"""GitHub Actions용 — slot 시각에 노션 source-of-truth로 FB/IG/Threads 게시.
+"""GitHub Actions용 — slot 시각에 노션 source-of-truth로 FB/IG/Threads/TikTok 게시.
 
 cron 4번/일 (07/11/17/20 KST). 영빈 PC 무관. SQLite 의존성 X.
 
@@ -7,14 +7,16 @@ cron 4번/일 (07/11/17/20 KST). 영빈 PC 무관. SQLite 의존성 X.
   2. scheduled_at이 현재 시각 ±15분 안인 모먼트만 처리
   3. R2 URL 구성: {R2_PUBLIC_URL}/{Internal ID}.mp4
   4. 메타: 노션 Title + Description
-  5. FB + IG + Threads 게시 (social.py)
+  5. FB + IG + Threads 게시 (social.py) + TikTok 게시 (Buffer shareNow)
   6. 노션 status='게시'로 전환 + Preview URL 업데이트
 
-TikTok은 게시 흐름에서 제외 (영빈 결정 2026-05-13): Buffer queue는 영빈 PC에서
-publish 시점에 직접 추가. Buffer 자체 슬롯 시각에 자동 게시되므로 cron 불필요.
+TikTok 처리 (2026-06-22 변경): Buffer customScheduled 예약 한도 10개 제한 회피 →
+publish_ready 단계에서 Buffer 호출 안 함. 대신 슬롯 시각에 여기서 Buffer shareNow
+(즉시 게시) 호출. 결과적으로 Buffer 예약 큐 안 쌓임.
 
 workflow_dispatch로 수동 trigger 시 모든 'scheduled' 모먼트 처리 (시간 필터 무시).
 """
+
 from __future__ import annotations
 
 import os
@@ -27,6 +29,8 @@ from app.integrations import r2
 from app.integrations.notion import (
     _get_client,
     list_pages_by_status,
+)
+from app.integrations.notion import (
     update_status as notion_update,
 )
 from app.integrations.social import (
@@ -149,13 +153,34 @@ def _publish_one_moment(page: dict[str, Any]) -> tuple[bool, dict[str, str]]:
             log.warning("publish_socials.threads_failed", iid=iid, error=str(e))
             results["threads"] = f"error:{e}"
 
+    # TikTok — Buffer shareNow로 즉시 게시 (예약 한도 회피).
+    # BUFFER_ACCESS_TOKEN 미설정 시 silent skip.
+    if _enabled("tiktok") and settings.buffer_access_token:
+        try:
+            channels = buffer_api.get_channels_by_service()
+            tiktok_channel_id = channels.get("tiktok")
+            if tiktok_channel_id:
+                post_id = buffer_api.create_video_post(
+                    channel_id=tiktok_channel_id,
+                    text=text,
+                    video_url=r2_url,
+                    service="tiktok",
+                    share_now=True,
+                )
+                results["tiktok"] = f"buffer:{post_id}" if post_id else "buffer:queued"
+            else:
+                log.warning("publish_socials.tiktok_no_channel", iid=iid)
+        except Exception as e:
+            log.warning("publish_socials.tiktok_failed", iid=iid, error=str(e))
+            results["tiktok"] = f"error:{e}"
+
     # 시도된 platform 중 1개라도 성공이면 status='게시'로 전환.
     success = any(not v.startswith("error:") for v in results.values())
     return success, results
 
 
 def main() -> None:
-    print(f"=== publish_socials_from_notion start ===", flush=True)
+    print("=== publish_socials_from_notion start ===", flush=True)
     print(f"SKIP_TIME_FILTER={SKIP_TIME_FILTER}", flush=True)
     if TARGET_INTERNAL_IDS:
         print(f"TARGET_INTERNAL_IDS={sorted(TARGET_INTERNAL_IDS)}", flush=True)
@@ -193,9 +218,7 @@ def main() -> None:
         ok, urls = _publish_one_moment(page)
         if ok:
             success += 1
-            ok_platforms = [
-                p for p, u in urls.items() if u and not u.startswith("error:")
-            ]
+            ok_platforms = [p for p, u in urls.items() if u and not u.startswith("error:")]
             print(f"  OK platforms={ok_platforms}", flush=True)
             # error로 시작하지 않는 URL 중 우선순위 (instagram > facebook > threads).
             preview: str | None = None
@@ -210,7 +233,8 @@ def main() -> None:
                 except Exception as e:
                     log.warning(
                         "publish_socials.notion_update_failed",
-                        page_id=page["id"], error=str(e),
+                        page_id=page["id"],
+                        error=str(e),
                     )
             # 모든 social 게시 + 노션 'published' 전환 끝 → R2 mp4 source 불필요 → 삭제.
             # 삭제 실패해도 게시 자체는 끝났으므로 swallow.
@@ -221,10 +245,11 @@ def main() -> None:
                 except Exception as e:
                     log.warning(
                         "publish_socials.r2_delete_failed",
-                        iid=iid, error=str(e),
+                        iid=iid,
+                        error=str(e),
                     )
         else:
-            print(f"  FAIL — all platforms errored", flush=True)
+            print("  FAIL — all platforms errored", flush=True)
         for platform, url in urls.items():
             print(f"  {platform}: {url[:60]}", flush=True)
 

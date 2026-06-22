@@ -214,32 +214,9 @@ def _publish_one(
         _mark_error(conn, short_id, page_id, f"youtube_upload_failed: {e}")
         return False
 
-    # 4. TikTok 예약 (Buffer customScheduled — Buffer가 슬롯 시각에 TikTok 자동 게시).
-    #    ko 채널만. 실패해도 YouTube 게시는 유지 (best-effort).
-    #    FB/IG/Threads는 GitHub Actions의 publish_socials_from_notion이 슬롯 시각에 처리.
-    if channel == "ko" and r2_url:
-        try:
-            channels = buffer_api.get_channels_by_service()
-            tiktok_channel_id = channels.get("tiktok")
-            if tiktok_channel_id:
-                buffer_api.create_video_post(
-                    channel_id=tiktok_channel_id,
-                    text=_build_buffer_text(meta),
-                    video_url=r2_url,
-                    service="tiktok",
-                    scheduled_at_utc=publish_at_utc,
-                )
-                log.info(
-                    "publish.tiktok_scheduled",
-                    short_id=short_id, due_at=publish_at_utc,
-                )
-            else:
-                log.warning("publish.tiktok_no_channel", short_id=short_id)
-        except Exception as e:
-            log.warning(
-                "publish.tiktok_buffer_failed",
-                short_id=short_id, error=str(e),
-            )
+    # 4. FB/IG/Threads/TikTok은 GitHub Actions가 slot 시각에 처리 (publish_socials_from_notion).
+    #    영빈 PC publish_ready 단계에서는 Buffer 호출 안 함 — Buffer 무료 플랜 예약 한도(10개)
+    #    회피. 슬롯 시각에 publish_socials_from_notion이 Buffer shareNow로 즉시 게시.
 
     # 5. SQLite + 노션 업데이트.
     urls_json = json.dumps(published_urls, ensure_ascii=False)

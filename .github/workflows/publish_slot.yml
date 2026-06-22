@@ -82,7 +82,9 @@ jobs:
           THREADS_APP_ID: ${{ secrets.THREADS_APP_ID }}
           THREADS_APP_SECRET: ${{ secrets.THREADS_APP_SECRET }}
           THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
-          # TikTok은 영빈 PC에서 Buffer queue 직접 push (영빈 결정 2026-05-13).
+          # TikTok (Buffer shareNow — 슬롯 시각에 즉시 게시, 예약 한도 회피)
+          BUFFER_ACCESS_TOKEN: ${{ secrets.BUFFER_ACCESS_TOKEN }}
+          BUFFER_ORGANIZATION_ID: ${{ secrets.BUFFER_ORGANIZATION_ID }}
           # workflow_dispatch에서 입력값 전달
           SKIP_TIME_FILTER: ${{ github.event.inputs.skip_time_filter }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}

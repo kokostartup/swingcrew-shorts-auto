@@ -2,6 +2,7 @@
 
 OAuth lifecycle: 첫 실행 브라우저 인증 → refresh token 저장 → 자동 갱신.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
@@ -28,9 +29,7 @@ _credentials_cache: dict[str, Credentials] = {}
 
 def _client_config() -> dict[str, Any]:
     if not settings.youtube_oauth_client_id or not settings.youtube_oauth_client_secret:
-        raise RuntimeError(
-            "YOUTUBE_OAUTH_CLIENT_ID / SECRET 미설정. .env 확인."
-        )
+        raise RuntimeError("YOUTUBE_OAUTH_CLIENT_ID / SECRET 미설정. .env 확인.")
     return {
         "installed": {
             "client_id": settings.youtube_oauth_client_id,
@@ -68,7 +67,8 @@ def get_credentials(channel: str = "ko") -> Credentials:
     if token_path.exists():
         try:
             creds = OAuthCredentials.from_authorized_user_file(
-                str(token_path), SCOPES,
+                str(token_path),
+                SCOPES,
             )
         except Exception as e:
             log.warning("youtube.oauth.token_load_failed", channel=channel, error=str(e))
@@ -108,8 +108,10 @@ def build_data_client(channel: str = "ko") -> Any:
     from googleapiclient.discovery import build
 
     return build(
-        "youtube", "v3",
-        credentials=get_credentials(channel), cache_discovery=False,
+        "youtube",
+        "v3",
+        credentials=get_credentials(channel),
+        cache_discovery=False,
     )
 
 
@@ -118,8 +120,10 @@ def build_analytics_client(channel: str = "ko") -> Any:
     from googleapiclient.discovery import build
 
     return build(
-        "youtubeAnalytics", "v2",
-        credentials=get_credentials(channel), cache_discovery=False,
+        "youtubeAnalytics",
+        "v2",
+        credentials=get_credentials(channel),
+        cache_discovery=False,
     )
 
 
@@ -187,14 +191,19 @@ def upload_short(
         },
     }
     media = MediaFileUpload(
-        str(video_path), mimetype="video/mp4", resumable=True,
+        str(video_path),
+        mimetype="video/mp4",
+        resumable=True,
     )
     request = client.videos().insert(
-        part="snippet,status", body=body, media_body=media,
+        part="snippet,status",
+        body=body,
+        media_body=media,
     )
     log.info(
         "youtube.upload_start",
-        title=title[:50], publish_at=publish_at_utc,
+        title=title[:50],
+        publish_at=publish_at_utc,
     )
     try:
         response = None
@@ -211,6 +220,30 @@ def upload_short(
 
 def video_url(video_id: str) -> str:
     return f"https://youtu.be/{video_id}"
+
+
+def update_publish_at(
+    video_id: str,
+    publish_at_utc: str,
+    channel: str = "ko",
+) -> None:
+    """이미 예약 업로드된 YouTube 영상의 publishAt 시각 변경.
+
+    publish_at_utc: ISO 8601 UTC (예: "2026-06-22T08:00:00Z").
+    privacyStatus는 'private' 유지 (publishAt이 도래하면 YouTube가 public 자동 전환).
+    """
+    client = build_data_client(channel)
+    client.videos().update(
+        part="status",
+        body={
+            "id": video_id,
+            "status": {
+                "publishAt": publish_at_utc,
+                "privacyStatus": "private",
+            },
+        },
+    ).execute()
+    log.info("youtube.publish_at_updated", video_id=video_id, publish_at=publish_at_utc)
 
 
 def delete_video(video_id: str, channel: str = "ko") -> bool:
@@ -233,7 +266,9 @@ def delete_video(video_id: str, channel: str = "ko") -> bool:
 
 
 def list_channel_uploads(
-    channel_id: str, max_results: int = 50, channel: str = "ko",
+    channel_id: str,
+    max_results: int = 50,
+    channel: str = "ko",
 ) -> list[dict[str, Any]]:
     """채널 uploads playlist에서 최신 N개 영상 메타.
 
@@ -241,9 +276,14 @@ def list_channel_uploads(
     description은 일부만 (snippet에서 잘림 가능). 정확한 ID 추출은 ingest에서 다시.
     """
     client = build_data_client(channel)
-    ch_resp = client.channels().list(
-        part="contentDetails", id=channel_id,
-    ).execute()
+    ch_resp = (
+        client.channels()
+        .list(
+            part="contentDetails",
+            id=channel_id,
+        )
+        .execute()
+    )
     items = ch_resp.get("items", [])
     if not items:
         return []
@@ -262,18 +302,21 @@ def list_channel_uploads(
         resp = client.playlistItems().list(**params).execute()
         for it in resp.get("items", []):
             sn = it.get("snippet", {})
-            results.append({
-                "video_id": sn.get("resourceId", {}).get("videoId"),
-                "title": sn.get("title"),
-                "description": sn.get("description") or "",
-                "published_at": sn.get("publishedAt"),
-            })
+            results.append(
+                {
+                    "video_id": sn.get("resourceId", {}).get("videoId"),
+                    "title": sn.get("title"),
+                    "description": sn.get("description") or "",
+                    "published_at": sn.get("publishedAt"),
+                }
+            )
         next_page = resp.get("nextPageToken")
         if not next_page:
             break
     log.info(
         "youtube.uploads_listed",
-        channel_id=channel_id, count=len(results),
+        channel_id=channel_id,
+        count=len(results),
     )
     return results
 

@@ -1,4 +1,5 @@
 """클립 컷 + 9:16 reframe + 시그니처 합성을 단일 filter_complex로 처리."""
+
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -80,9 +81,11 @@ XFADE_DURATION = 0.3  # 부드러운 전환 (sec). segment 사이 cross-fade 길
 
 
 def _face_centered_dynamic(
-    in_label: str, out_label: str,
+    in_label: str,
+    out_label: str,
     segments: list[tuple[float, float, float, int]],
-    src_w: int, src_h: int,
+    src_w: int,
+    src_h: int,
 ) -> str:
     """segment별 face_count로 cover scale vs fit letterbox 자동 분기 + xfade chain.
 
@@ -113,16 +116,23 @@ def _face_centered_dynamic(
         e_end = _extended_end(i)
         fc = seg[3] if len(seg) >= 4 else 1
         if fc >= 2:
-            # Wide letterbox (3:2 = 6:4 비율) — 영상 좌우 약간 crop + 상하 약한 padding.
-            # 1) crop iw=ih*1.5 (16:9→3:2, 양옆 ~16% 잘림 — 영빈 "양옆 조금 잘려도 OK")
-            # 2) scale 1080:720 후 1080×1350 영역 center pad (위/아래 315px씩)
+            # Blur padding 강화 — 검정 padding 대신 영상 자체 zoom+blur로 배경 채움.
+            # YouTube/TikTok 공식 가이드 + 2026-06 데이터: 검정 바는 "Shorts 아님" 시그널.
+            # 1) split → 전경/배경 동일 영상 두 갈래
+            # 2) 전경: 좌우 약간 crop (16:9→3:2) + 1080 wide scale (~720h)
+            # 3) 배경: 1080×1350 채우게 zoom + gblur(gaussian)
+            #    + 채도 65% 낮춤(좌우 색 split 완화) + 살짝 어둡게(영상 본체 부각)
+            # 4) 배경 위 전경 중앙 overlay
             parts.append(
                 f"[v{i}]trim=start={s_start:.3f}:end={e_end:.3f},"
                 f"setpts=PTS-STARTPTS,fps=30000/1001,"
-                f"crop=ih*1.5:ih:(iw-ih*1.5)/2:0,"
-                f"scale={CANVAS_W}:-2,"
-                f"pad={CANVAS_W}:{VIDEO_H}:(ow-iw)/2:(oh-ih)/2:color=black,"
-                f"setsar=1[s{i}]"
+                f"split=2[fg{i}][bg{i}];"
+                f"[fg{i}]crop=ih*1.5:ih:(iw-ih*1.5)/2:0,"
+                f"scale={CANVAS_W}:-2[fgs{i}];"
+                f"[bg{i}]scale={CANVAS_W}:{VIDEO_H}:force_original_aspect_ratio=increase,"
+                f"crop={CANVAS_W}:{VIDEO_H},"
+                f"gblur=sigma=30,hue=s=0.35,eq=brightness=-0.15[bgblur{i}];"
+                f"[bgblur{i}][fgs{i}]overlay=0:(H-h)/2,setsar=1[s{i}]"
             )
         else:
             crop_x = _crop_x_pixel(cx, src_w, crop_w)
@@ -156,10 +166,7 @@ def _face_centered_dynamic(
     for i, seg in enumerate(segments):
         s_start = seg[0]
         e_end = _extended_end(i)
-        parts.append(
-            f"[a{i}]atrim=start={s_start:.3f}:end={e_end:.3f},"
-            f"asetpts=PTS-STARTPTS[as{i}]"
-        )
+        parts.append(f"[a{i}]atrim=start={s_start:.3f}:end={e_end:.3f},asetpts=PTS-STARTPTS[as{i}]")
     if n == 1:
         parts.append("[as0]acopy[aout]")
     else:
@@ -167,17 +174,18 @@ def _face_centered_dynamic(
         for i in range(1, n):
             next_lbl = f"[as{i}]"
             cur_out = "[aout]" if i == n - 1 else f"[xfa{i}]"
-            parts.append(
-                f"{prev_lbl}{next_lbl}acrossfade=duration={XFADE_DURATION}{cur_out}"
-            )
+            parts.append(f"{prev_lbl}{next_lbl}acrossfade=duration={XFADE_DURATION}{cur_out}")
             prev_lbl = cur_out
 
     return ";".join(parts) + ";"
 
 
 def _face_centered_4_5(
-    in_label: str, out_label: str,
-    cx_ratio: float, src_w: int, src_h: int,
+    in_label: str,
+    out_label: str,
+    cx_ratio: float,
+    src_w: int,
+    src_h: int,
 ) -> str:
     """얼굴 중심 x 위치 기반 4:5 crop. 위아래 잘림 없음.
 
@@ -223,14 +231,16 @@ def make_short(
         if face_center_x is None:
             log.warning(
                 "make_short.face_centered_no_cx_fallback_letterbox",
-                src=str(src), start=start,
+                src=str(src),
+                start=start,
             )
             strategy = "letterbox_4_5"
     elif strategy == "face_centered_dynamic":
         if not face_segments:
             log.warning(
                 "make_short.dynamic_no_segments_fallback_letterbox",
-                src=str(src), start=start,
+                src=str(src),
+                start=start,
             )
             strategy = "letterbox_4_5"
     elif strategy not in REFRAME_FILTERS:
@@ -252,14 +262,22 @@ def make_short(
         src_w, src_h = probe_dimensions(src)
         effective_src_h = int(src_h * 0.8) if is_b_series else src_h
         reframe_segment = _face_centered_4_5(
-            in_label, "[reframed];", face_center_x, src_w, effective_src_h,
+            in_label,
+            "[reframed];",
+            face_center_x,
+            src_w,
+            effective_src_h,
         )
     elif strategy == "face_centered_dynamic":
         assert face_segments is not None
         src_w, src_h = probe_dimensions(src)
         effective_src_h = int(src_h * 0.8) if is_b_series else src_h
         reframe_segment = _face_centered_dynamic(
-            in_label, "[reframed]", face_segments, src_w, effective_src_h,
+            in_label,
+            "[reframed]",
+            face_segments,
+            src_w,
+            effective_src_h,
         )
     else:
         reframe = REFRAME_FILTERS[strategy]
@@ -287,41 +305,84 @@ def make_short(
     if strategy == "face_centered_dynamic":
         # dynamic은 filter_complex 안에 [aout] (acrossfade chain) 이미 있음.
         # 같은 stream에 simple -af 추가 못함 → filter_complex 안에 pan chain.
-        filter_complex_with_pan = (
-            f"{filter_complex};[aout]{audio_pan}[aout_mixed]"
-        )
+        filter_complex_with_pan = f"{filter_complex};[aout]{audio_pan}[aout_mixed]"
         cmd = [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
             *input_decoder,
-            "-ss", str(start), "-to", str(end),
-            "-i", str(src),
-            "-filter_complex", filter_complex_with_pan,
-            "-map", "[out]", "-map", "[aout_mixed]",
+            "-ss",
+            str(start),
+            "-to",
+            str(end),
+            "-i",
+            str(src),
+            "-filter_complex",
+            filter_complex_with_pan,
+            "-map",
+            "[out]",
+            "-map",
+            "[aout_mixed]",
             *encoder,
-            "-c:a", "aac", "-b:a", "128k",
-            "-r", "30", "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-r",
+            "30",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
             str(output),
         ]
     else:
         cmd = [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
             *input_decoder,
-            "-i", str(src),
-            "-ss", str(start), "-to", str(end),
-            "-filter_complex", filter_complex,
-            "-map", "[out]", "-map", "0:a?",
-            "-af", audio_pan,
+            "-i",
+            str(src),
+            "-ss",
+            str(start),
+            "-to",
+            str(end),
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[out]",
+            "-map",
+            "0:a?",
+            "-af",
+            audio_pan,
             *encoder,
-            "-c:a", "aac", "-b:a", "128k",
-            "-r", "30", "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-r",
+            "30",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
             str(output),
         ]
 
     log.info(
-        "ffmpeg.run", strategy=strategy, src=str(src), output=str(output),
-        start=start, end=end, encoder=encoder[1], hwaccel=hwaccel,
+        "ffmpeg.run",
+        strategy=strategy,
+        src=str(src),
+        output=str(output),
+        start=start,
+        end=end,
+        encoder=encoder[1],
+        hwaccel=hwaccel,
     )
 
     result = subprocess.run(cmd, capture_output=True, text=True)

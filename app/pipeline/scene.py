@@ -255,14 +255,26 @@ def _build_segments(
 def classify_scene_with_metrics(
     video_path: Path, start: float, end: float,
 ) -> tuple[str, float | None, list[tuple[float, float, float, int]] | None]:
-    """샘플 프레임에서 얼굴 cx + face_count 측정 → strategy + cx + segments.
+    """모든 영상을 wide letterbox(face_count=2 layout)로 통일.
 
-    반환: (strategy, face_center_x | None, segments | None)
-    - segments 4-tuple: (start, end, avg_cx, mode_face_count)
-    - face_count 시계열에 2명+ 모드 있으면 자동 face_centered_dynamic (mix 처리)
-    - cx 표준편차 > DYNAMIC_STD_THRESHOLD → face_centered_dynamic + segments
-    - 얼굴 검출 + 안정 + 모두 1명 → face_centered_4_5 + cx
-    - 얼굴 미검출 → letterbox_4_5 + None
+    영빈 결정 2026-06-01: cover scale의 face 이동/검출 오류 (사람 frame 빠짐,
+    legacy segments fc=1 fallback 등) 시청 방해 + 일관성 부족. 모든 영상을
+    face_centered_dynamic + 1 segment (fc=2)로 만들어 edit.py 기존 wide
+    letterbox 흐름으로 처리. face detection 자체 skip → 시간 절약.
+
+    반환: (face_centered_dynamic, 0.5, [(0, end-start, 0.5, 2)])
+    """
+    duration = max(0.1, end - start)
+    return FACE_CENTERED_DYNAMIC, 0.5, [(0.0, duration, 0.5, 2)]
+
+
+def _classify_scene_with_face_detection(
+    video_path: Path, start: float, end: float,
+) -> tuple[str, float | None, list[tuple[float, float, float, int]] | None]:
+    """[Deprecated 2026-06-01] face detection 기반 분류 — 영빈 결정으로 비활성.
+
+    cover scale의 face 이동/검출 오류로 시청 방해 → 모든 영상 wide letterbox 통일.
+    복원 시 classify_scene_with_metrics 본체를 이 함수 본체로 교체.
     """
     if not video_path.exists():
         log.warning("scene.video_missing", path=str(video_path))

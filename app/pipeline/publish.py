@@ -55,11 +55,17 @@ def _build_buffer_text(meta: PublishMeta) -> str:
 
 def _resolve_meta(
     row: sqlite3.Row, page_id: str, moment: MagicMoment, channel: str = "ko",
+    *, skip_gemini_fallback: bool = False,
 ) -> PublishMeta | None:
     """메타 결정 우선순위:
     1. SQLite publish_meta_json (process_approved에서 Gemini 생성)
     2. 노션 페이지 Title/Description (영빈 override) — 있으면 base에 덮어쓰기
     3. 둘 다 없으면 즉시 Gemini fallback (channel별 프롬프트)
+
+    skip_gemini_fallback:
+      False (기본, cron 호출용) — 1/2 비면 즉시 Gemini fallback.
+      True (Claude Code 세션 호출용) — Gemini fallback 막음. publish-meta-writer 에이전트가
+        publish_meta_json 채울 때까지 publish 호출 자체를 안 해야 함. 안 채워졌으면 None 반환.
     """
     base: PublishMeta | None = None
     raw = row["publish_meta_json"]
@@ -77,7 +83,14 @@ def _resolve_meta(
         notion_meta = {"title": None, "description": None}
 
     if base is None:
-        # SQLite 비어있음 → Gemini 즉시 생성
+        if skip_gemini_fallback:
+            log.warning(
+                "publish.meta_missing_skip_gemini",
+                page_id=page_id,
+                reason="claude_code_agent_path — publish-meta-writer 에이전트로 채워야 함",
+            )
+            return None
+        # SQLite 비어있음 → Gemini 즉시 생성 (cron path)
         try:
             base = generate_publish_meta(moment, channel=channel)
         except Exception as e:
@@ -131,8 +144,13 @@ def _upload_r2(internal_id: str, mp4_path: Path) -> str:
 def _publish_one(
     conn: sqlite3.Connection,
     row: sqlite3.Row,
+    *,
+    skip_gemini_fallback: bool = False,
 ) -> bool:
-    """단일 shorts row 처리 → 성공 시 True. 실패는 status='error'."""
+    """단일 shorts row 처리 → 성공 시 True. 실패는 status='error'.
+
+    skip_gemini_fallback: True면 publish_meta_json 비었을 때 Gemini 호출 안 함 (Claude Code path).
+    """
     short_id = row["id"]
     page_id = row["notion_page_id"]
     internal_id = row["internal_id"]
@@ -158,9 +176,10 @@ def _publish_one(
 
     # 1. R2 업로드 — ko 채널만. EN 채널은 YouTube only(FB/IG/Threads 안 함)이라 R2 fetch
     #    수요 0 → 업로드 자체 skip (스토리지/시간 절약).
+    r2_url: str | None = None
     if channel == "ko":
         try:
-            _upload_r2(internal_id, Path(generated_path))
+            r2_url = _upload_r2(internal_id, Path(generated_path))
         except Exception as e:
             log.warning("publish.r2_upload_failed", short_id=short_id, error=str(e))
             _mark_error(conn, short_id, page_id, f"r2_upload_failed: {e}")
@@ -168,7 +187,10 @@ def _publish_one(
 
     # 2. 메타 결정: SQLite publish_meta_json (process_approved 시점 Gemini 생성) +
     #    노션 Title/Description override (영빈 수정 우선).
-    meta = _resolve_meta(row, page_id, moment, channel=channel)
+    meta = _resolve_meta(
+        row, page_id, moment, channel=channel,
+        skip_gemini_fallback=skip_gemini_fallback,
+    )
     if meta is None:
         _mark_error(conn, short_id, page_id, "publish_meta_unresolved")
         return False
@@ -192,8 +214,32 @@ def _publish_one(
         _mark_error(conn, short_id, page_id, f"youtube_upload_failed: {e}")
         return False
 
-    # 4. FB/IG/Threads/TikTok은 GitHub Actions가 slot 시각에 처리 (publish_socials_from_notion).
-    #    영빈 PC는 R2 + YouTube까지만. social 호출 X.
+    # 4. TikTok 예약 (Buffer customScheduled — Buffer가 슬롯 시각에 TikTok 자동 게시).
+    #    ko 채널만. 실패해도 YouTube 게시는 유지 (best-effort).
+    #    FB/IG/Threads는 GitHub Actions의 publish_socials_from_notion이 슬롯 시각에 처리.
+    if channel == "ko" and r2_url:
+        try:
+            channels = buffer_api.get_channels_by_service()
+            tiktok_channel_id = channels.get("tiktok")
+            if tiktok_channel_id:
+                buffer_api.create_video_post(
+                    channel_id=tiktok_channel_id,
+                    text=_build_buffer_text(meta),
+                    video_url=r2_url,
+                    service="tiktok",
+                    scheduled_at_utc=publish_at_utc,
+                )
+                log.info(
+                    "publish.tiktok_scheduled",
+                    short_id=short_id, due_at=publish_at_utc,
+                )
+            else:
+                log.warning("publish.tiktok_no_channel", short_id=short_id)
+        except Exception as e:
+            log.warning(
+                "publish.tiktok_buffer_failed",
+                short_id=short_id, error=str(e),
+            )
 
     # 5. SQLite + 노션 업데이트.
     urls_json = json.dumps(published_urls, ensure_ascii=False)
@@ -237,8 +283,14 @@ def _mark_error(
             pass
 
 
-def publish_ready() -> int:
-    """status='generated' + Scheduled At 있는 행 모두 게시 → 처리 수 반환."""
+def publish_ready(*, skip_gemini_fallback: bool = False) -> int:
+    """status='generated' + Scheduled At 있는 행 모두 게시 → 처리 수 반환.
+
+    skip_gemini_fallback:
+      False (기본, cron 호출용) — publish_meta_json 비어 있으면 Gemini 즉시 fallback 호출.
+      True (Claude Code 세션 호출용) — Gemini fallback 막음. publish_meta_json 안 채워진
+        모먼트는 error로 표시 → publish-meta-writer 에이전트가 먼저 채워야 publish 가능.
+    """
     conn = get_connection()
     processed = 0
     try:
@@ -250,7 +302,7 @@ def publish_ready() -> int:
             "  AND s.scheduled_at IS NOT NULL"
         ).fetchall()
         for row in rows:
-            if _publish_one(conn, row):
+            if _publish_one(conn, row, skip_gemini_fallback=skip_gemini_fallback):
                 processed += 1
         log.info("publish.batch_done", processed=processed, total=len(rows))
         return processed

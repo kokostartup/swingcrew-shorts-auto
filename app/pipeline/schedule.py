@@ -4,6 +4,7 @@
   - 한국 (ko): 매일 KST 07/11/17/20 (4슬롯)
   - 영어 (en): 매일 America/Los_Angeles wall clock 07/20 (2슬롯, DST 자동)
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, timezone
@@ -47,13 +48,20 @@ def _now_in(tz: ZoneInfo | timezone) -> datetime:
 
 
 def _candidate_slots(
-    channel: str, max_lookahead_days: int = 30,
+    channel: str,
+    max_lookahead_days: int = 30,
+    min_lead_hours: int | None = None,
 ) -> list[datetime]:
-    """channel별 다음 빈 슬롯 후보 (시간순). MIN_LEAD_HOURS 이후."""
+    """channel별 다음 빈 슬롯 후보 (시간순). MIN_LEAD_HOURS 이후.
+
+    min_lead_hours: None이면 channel default (ko=24, en=0). 명시하면 override.
+        Claude Code 세션에서 영빈이 manual 처리 시 영빈 검토 lead 불필요 → 0~1로 호출 가능.
+    """
     tz = _tz_for(channel)
     slot_hours = _slot_hours_for(channel)
     now = _now_in(tz)
-    earliest = now + timedelta(hours=_min_lead_hours_for(channel))
+    lead = min_lead_hours if min_lead_hours is not None else _min_lead_hours_for(channel)
+    earliest = now + timedelta(hours=lead)
     slots: list[datetime] = []
     day = earliest.date()
     for _ in range(max_lookahead_days):
@@ -98,14 +106,17 @@ def _existing_scheduled_in(channel: str) -> set[datetime]:
 def assign_scheduled_at_for_pending(
     pending_short_ids: list[int] | None = None,
     channel: str = "ko",
+    min_lead_hours: int | None = None,
 ) -> int:
     """status='generated' + scheduled_at IS NULL인 모먼트에 다음 빈 슬롯 할당.
 
     channel: 'ko' 또는 'en'. ko는 KST 4슬롯, en은 LA 2슬롯.
     pending_short_ids: 특정 행만 처리. None이면 모든 적격 행.
+    min_lead_hours: None이면 channel default (ko=24, en=0). Claude Code 세션에서 영빈이
+        manual 처리 시 검토 lead 불필요 → 0~1로 호출 (즉 슬롯이 1시간 이상 미래면 OK).
     반환: 할당된 모먼트 수.
     """
-    candidates = _candidate_slots(channel)
+    candidates = _candidate_slots(channel, min_lead_hours=min_lead_hours)
     used = _existing_scheduled_in(channel)
 
     conn = get_connection()
@@ -135,7 +146,9 @@ def assign_scheduled_at_for_pending(
             if next_slot is None:
                 log.warning(
                     "schedule.no_slot_available",
-                    short_id=r["id"], channel=channel, lookahead_days=30,
+                    short_id=r["id"],
+                    channel=channel,
+                    lookahead_days=30,
                 )
                 break
             iso_local = next_slot.isoformat()
@@ -150,12 +163,15 @@ def assign_scheduled_at_for_pending(
                 except Exception as e:
                     log.warning(
                         "schedule.notion_push_failed",
-                        short_id=r["id"], error=str(e),
+                        short_id=r["id"],
+                        error=str(e),
                     )
             log.info(
                 "schedule.assigned",
-                short_id=r["id"], internal_id=r["internal_id"],
-                channel=channel, slot=iso_local,
+                short_id=r["id"],
+                internal_id=r["internal_id"],
+                channel=channel,
+                slot=iso_local,
             )
             assigned += 1
         return assigned

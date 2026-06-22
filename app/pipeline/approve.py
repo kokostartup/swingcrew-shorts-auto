@@ -8,6 +8,7 @@
     rejected  ← 영빈 토글 → poll이 sync, 이후 처리는 없음
     error     ← 처리 단계 실패
 """
+
 from __future__ import annotations
 
 import json
@@ -48,8 +49,7 @@ def sync_to_notion(video: Video, result: AnalysisResult) -> int:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM shorts WHERE source_video_id = ? "
-            "ORDER BY start_time",
+            "SELECT * FROM shorts WHERE source_video_id = ? ORDER BY start_time",
             (video.id,),
         ).fetchall()
         # 분석 결과의 모먼트를 start_time 키로 인덱싱 (0.1초 단위 반올림)
@@ -63,7 +63,8 @@ def sync_to_notion(video: Video, result: AnalysisResult) -> int:
             if moment is None:
                 log.warning(
                     "approve.moment_not_in_cache",
-                    short_id=row["id"], start=row["start_time"],
+                    short_id=row["id"],
+                    start=row["start_time"],
                 )
                 continue
             # 노션 push 시점에 short internal_id 부여 (없으면) — 영빈이 노션에서
@@ -71,28 +72,36 @@ def sync_to_notion(video: Video, result: AnalysisResult) -> int:
             short_iid = row["internal_id"]
             if not short_iid and video.internal_id:
                 short_iid = _next_short_internal_id(
-                    conn, video.internal_id, video.id,
+                    conn,
+                    video.internal_id,
+                    video.id,
                 )
                 conn.execute(
                     "UPDATE shorts SET internal_id = ? WHERE id = ?",
                     (short_iid, row["id"]),
                 )
             page_id = notion_create_page(
-                video, moment, short_iid,
-                channel=video.channel, initial_status=initial_status,
+                video,
+                moment,
+                short_iid,
+                channel=video.channel,
+                initial_status=initial_status,
             )
             from datetime import UTC, datetime
+
             conn.execute(
-                "UPDATE shorts SET notion_page_id = ?, status = ?, "
-                "pushed_at = ? WHERE id = ?",
+                "UPDATE shorts SET notion_page_id = ?, status = ?, pushed_at = ? WHERE id = ?",
                 (page_id, initial_status, datetime.now(UTC).isoformat(), row["id"]),
             )
             created += 1
         conn.commit()
         log.info(
             "approve.sync_to_notion",
-            youtube_id=video.youtube_id, channel=video.channel,
-            initial_status=initial_status, created=created, total=len(rows),
+            youtube_id=video.youtube_id,
+            channel=video.channel,
+            initial_status=initial_status,
+            created=created,
+            total=len(rows),
         )
         return created
     finally:
@@ -109,9 +118,12 @@ def poll_status_from_notion(channel: str = "ko") -> dict[str, int]:
         {"approved": N, "rejected": N, "scheduled_synced": N, "scene_overridden": N}
     """
     counts = {
-        "approved": 0, "rejected": 0,
-        "scheduled_synced": 0, "scene_overridden": 0,
-        "time_overridden": 0, "copy_overridden": 0,
+        "approved": 0,
+        "rejected": 0,
+        "scheduled_synced": 0,
+        "scene_overridden": 0,
+        "time_overridden": 0,
+        "copy_overridden": 0,
     }
     conn = get_connection()
     try:
@@ -135,8 +147,7 @@ def poll_status_from_notion(channel: str = "ko") -> dict[str, int]:
                 new_copy2 = p.get("copy2")
                 if row["status"] != status_en and status_en in {"approved", "rejected"}:
                     conn.execute(
-                        "UPDATE shorts SET status = ?, scheduled_at = ? "
-                        "WHERE id = ?",
+                        "UPDATE shorts SET status = ?, scheduled_at = ? WHERE id = ?",
                         (status_en, new_sched, row["id"]),
                     )
                     counts[status_en] += 1
@@ -194,35 +205,41 @@ def poll_status_from_notion(channel: str = "ko") -> dict[str, int]:
 
 
 def _next_short_internal_id(
-    conn: sqlite3.Connection, video_internal_id: str, source_video_id: int,
+    conn: sqlite3.Connection,
+    video_internal_id: str,
+    source_video_id: int,
 ) -> str:
     """그 영상에서 이미 부여된 S 번호의 다음 값을 반환.
 
     예: 기존에 S01, S02 있으면 'S03'. 없으면 'S01'.
     """
     rows = conn.execute(
-        "SELECT internal_id FROM shorts "
-        "WHERE source_video_id = ? AND internal_id IS NOT NULL",
+        "SELECT internal_id FROM shorts WHERE source_video_id = ? AND internal_id IS NOT NULL",
         (source_video_id,),
     ).fetchall()
     used = set()
     prefix = f"{video_internal_id}-S"
     for r in rows:
         sid = r["internal_id"] or ""
-        if sid.startswith(prefix) and sid[len(prefix):].isdigit():
-            used.add(int(sid[len(prefix):]))
+        if sid.startswith(prefix) and sid[len(prefix) :].isdigit():
+            used.add(int(sid[len(prefix) :]))
     n = 1
     while n in used:
         n += 1
     return f"{prefix}{n:02d}"
 
 
-def process_approved() -> int:
+def process_approved(*, skip_publish_meta: bool = False) -> int:
     """status='approved' 행에 대해 ffmpeg로 시그니처 mp4 생성.
 
     승인 시점에 internal_id 부여 (예: 26-B001-S01).
     완료 시 status='generated' + Notion '생성' + Internal ID 업데이트.
     실패 시 status='error' + Notion '오류'.
+
+    skip_publish_meta:
+      False (기본, cron 호출용) — Gemini로 publish_meta 자동 생성 + 노션 Title/Description 채움.
+      True (Claude Code 세션 호출용) — publish_meta skip. Claude Code 메인이 직후
+        publish-meta-writer 에이전트로 처리하도록 publish_meta_json=NULL 상태로 둠.
     """
     settings.shorts_output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -246,10 +263,7 @@ def process_approved() -> int:
                 continue
 
             moment = next(
-                (
-                    m for m in cached.moments
-                    if abs(m.start_sec - row["start_time"]) < 0.5
-                ),
+                (m for m in cached.moments if abs(m.start_sec - row["start_time"]) < 0.5),
                 None,
             )
             if moment is None and cached.moments:
@@ -259,10 +273,12 @@ def process_approved() -> int:
                     cached.moments,
                     key=lambda m: abs(m.start_sec - row["start_time"]),
                 )
-                moment = nearest.model_copy(update={
-                    "start_sec": row["start_time"],
-                    "end_sec": row["end_time"],
-                })
+                moment = nearest.model_copy(
+                    update={
+                        "start_sec": row["start_time"],
+                        "end_sec": row["end_time"],
+                    }
+                )
                 log.info(
                     "approve.cache_moment_time_overridden",
                     short_id=short_id,
@@ -282,7 +298,8 @@ def process_approved() -> int:
                 moment = moment.model_copy(update=copy_overrides)
                 log.info(
                     "approve.copy_overridden",
-                    short_id=short_id, **copy_overrides,
+                    short_id=short_id,
+                    **copy_overrides,
                 )
 
             video = get_video_by_youtube_id(conn, youtube_id)
@@ -294,54 +311,42 @@ def process_approved() -> int:
             short_internal_id = row["internal_id"]
             if not short_internal_id and video_internal_id:
                 short_internal_id = _next_short_internal_id(
-                    conn, video_internal_id, row["source_video_id"],
+                    conn,
+                    video_internal_id,
+                    row["source_video_id"],
                 )
 
-            # face metrics 없으면 즉석 backfill (옛 분석 데이터 호환).
-            # dynamic + segments 없거나 3-tuple legacy(face_count 누락) → rescan 필수.
-            # 3-tuple은 model_validator가 fc=1 default로 채워 모든 segment를 cover
-            # 처리하므로 wide letterbox mix가 안 됨 (P003 케이스).
-            face_cx = row["face_center_x"]
-            current_scene = row["scene_type"]
-            backfilled_segments: list[tuple[float, float, float, int]] | None = None
-            legacy_segments = False
-            if current_scene == "face_centered_dynamic" and row["face_segments"]:
-                try:
-                    legacy_segments = any(
-                        len(s) < 4 for s in json.loads(row["face_segments"])
-                    )
-                except Exception:
-                    legacy_segments = True
-            need_backfill = (
-                face_cx is None
-                or (current_scene == "face_centered_dynamic"
-                    and (not row["face_segments"] or legacy_segments))
-            )
-            if need_backfill:
-                try:
-                    new_scene, new_cx, new_segments = classify_scene_with_metrics(
-                        video.local_path, moment.start_sec, moment.end_sec,
-                    )
-                    face_cx = new_cx
-                    backfilled_segments = new_segments
-                    # 영빈이 override 안 했을 때만 scene_type 갈아끼움.
-                    if not current_scene or current_scene == "letterbox_4_5":
-                        current_scene = new_scene
-                    segments_to_save = (
-                        json.dumps([list(s) for s in new_segments])
-                        if new_segments else None
-                    )
-                    conn.execute(
-                        "UPDATE shorts SET face_center_x = ?, scene_type = ?, "
-                        "face_segments = ? WHERE id = ?",
-                        (face_cx, current_scene, segments_to_save, short_id),
-                    )
-                    conn.commit()
-                except Exception as e:
-                    log.warning(
-                        "approve.scene_backfill_failed",
-                        short_id=short_id, error=str(e),
-                    )
+            # 영빈 결정 2026-06-05: 모든 영상을 wide letterbox 강제 (face_count 무관).
+            # classify_scene_with_metrics가 face detection skip하고 항상
+            # (face_centered_dynamic, 0.5, [(0, dur, 0.5, 2)]) 반환.
+            # 옛 face_segments cache 있어도 무시하고 항상 새 룰 적용.
+            try:
+                new_scene, new_cx, new_segments = classify_scene_with_metrics(
+                    video.local_path,
+                    moment.start_sec,
+                    moment.end_sec,
+                )
+                face_cx = new_cx
+                backfilled_segments = new_segments
+                current_scene = new_scene
+                segments_to_save = (
+                    json.dumps([list(s) for s in new_segments]) if new_segments else None
+                )
+                conn.execute(
+                    "UPDATE shorts SET face_center_x = ?, scene_type = ?, "
+                    "face_segments = ? WHERE id = ?",
+                    (face_cx, current_scene, segments_to_save, short_id),
+                )
+                conn.commit()
+            except Exception as e:
+                log.warning(
+                    "approve.scene_backfill_failed",
+                    short_id=short_id,
+                    error=str(e),
+                )
+                face_cx = row["face_center_x"]
+                current_scene = row["scene_type"]
+                backfilled_segments = None
 
             # SQLite scene_type 우선 (영빈 override 반영). cache fallback.
             strategy = current_scene or moment.scene_type or "letterbox_4_5"
@@ -361,7 +366,9 @@ def process_approved() -> int:
                         # 3-tuple (legacy) / 4-tuple 둘 다 호환.
                         face_segments = [
                             (
-                                float(s[0]), float(s[1]), float(s[2]),
+                                float(s[0]),
+                                float(s[1]),
+                                float(s[2]),
                                 int(s[3]) if len(s) >= 4 else 1,
                             )
                             for s in raw
@@ -369,14 +376,17 @@ def process_approved() -> int:
                     except Exception as e:
                         log.warning(
                             "approve.face_segments_parse_failed",
-                            short_id=short_id, error=str(e),
+                            short_id=short_id,
+                            error=str(e),
                         )
             try:
                 make_short(
                     video.local_path,
-                    moment.start_sec, moment.end_sec,
+                    moment.start_sec,
+                    moment.end_sec,
                     strategy,  # type: ignore[arg-type]
-                    moment.copy1, moment.copy2,
+                    moment.copy1,
+                    moment.copy2,
                     output,
                     face_center_x=face_cx,
                     face_segments=face_segments,
@@ -384,34 +394,56 @@ def process_approved() -> int:
                 )
             except Exception as e:
                 log.warning(
-                    "approve.ffmpeg_failed", short_id=short_id, error=str(e),
+                    "approve.ffmpeg_failed",
+                    short_id=short_id,
+                    error=str(e),
                 )
                 _mark_error(conn, short_id, page_id, f"ffmpeg_failed: {e}")
                 continue
 
             # Gemini publish_meta 생성 (title/description/tags/hashtags).
             # 영빈이 노션에서 Title/Description 검토 + 수정 가능.
+            # Claude Code 세션에서 호출 시 skip_publish_meta=True → 메인이 직후
+            # publish-meta-writer 에이전트로 처리.
             meta_json: str | None = None
             meta_title: str | None = None
             meta_description: str | None = None
-            try:
-                meta = generate_publish_meta(moment, channel=video.channel)
-                meta_json = meta.model_dump_json()
-                meta_title = meta.title
-                meta_description = meta.description
-            except Exception as e:
-                log.warning(
-                    "approve.publish_meta_failed",
-                    short_id=short_id, error=str(e),
+            if not skip_publish_meta:
+                try:
+                    meta = generate_publish_meta(moment, channel=video.channel)
+                    meta_json = meta.model_dump_json()
+                    meta_title = meta.title
+                    meta_description = meta.description
+                except Exception as e:
+                    log.warning(
+                        "approve.publish_meta_failed",
+                        short_id=short_id,
+                        error=str(e),
+                    )
+            else:
+                log.info(
+                    "approve.publish_meta_skipped",
+                    short_id=short_id,
+                    reason="claude_code_agent_path",
                 )
 
-            conn.execute(
-                "UPDATE shorts SET status = 'generated', "
-                "generated_path = ?, internal_id = ?, "
-                "publish_meta_json = ? "
-                "WHERE id = ?",
-                (str(output), short_internal_id, meta_json, short_id),
-            )
+            # skip_publish_meta=True인 경우 publish_meta_json은 그대로 보존
+            # (Claude Code 세션에서 publish-meta-writer 에이전트 결과가 이미 있을 수 있음)
+            if skip_publish_meta:
+                conn.execute(
+                    "UPDATE shorts SET status = 'generated', "
+                    "generated_path = ?, internal_id = ? "
+                    "WHERE id = ?",
+                    (str(output), short_internal_id, short_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE shorts SET status = 'generated', "
+                    "generated_path = ?, internal_id = ?, "
+                    "publish_meta_json = ? "
+                    "WHERE id = ?",
+                    (str(output), short_internal_id, meta_json, short_id),
+                )
             conn.commit()
 
             update_extra: dict[str, Any] = {"internal_id": short_internal_id}
@@ -424,7 +456,8 @@ def process_approved() -> int:
             except Exception as e:
                 log.warning(
                     "approve.notion_status_update_failed",
-                    short_id=short_id, error=str(e),
+                    short_id=short_id,
+                    error=str(e),
                 )
             processed += 1
         log.info("approve.process_approved", processed=processed)
@@ -463,14 +496,16 @@ def auto_reject_stale(max_age_days: int = 7) -> int:
                 except Exception as e:
                     log.warning(
                         "approve.auto_reject_notion_failed",
-                        short_id=r["id"], error=str(e),
+                        short_id=r["id"],
+                        error=str(e),
                     )
             rejected += 1
         conn.commit()
         if rejected:
             log.info(
                 "approve.auto_rejected",
-                count=rejected, max_age_days=max_age_days,
+                count=rejected,
+                max_age_days=max_age_days,
             )
         return rejected
     finally:
@@ -478,12 +513,16 @@ def auto_reject_stale(max_age_days: int = 7) -> int:
 
 
 def _mark_error(
-    conn: sqlite3.Connection, short_id: int, page_id: str | None, reason: str,
+    conn: sqlite3.Connection,
+    short_id: int,
+    page_id: str | None,
+    reason: str,
 ) -> None:
     """SQLite + Notion 둘 다 error 상태로 마킹 (Notion 실패는 swallow)."""
     log.warning("approve.mark_error", short_id=short_id, reason=reason)
     conn.execute(
-        "UPDATE shorts SET status = 'error' WHERE id = ?", (short_id,),
+        "UPDATE shorts SET status = 'error' WHERE id = ?",
+        (short_id,),
     )
     conn.commit()
     if page_id:
@@ -492,7 +531,8 @@ def _mark_error(
         except Exception as e:
             log.warning(
                 "approve.notion_error_update_failed",
-                short_id=short_id, error=str(e),
+                short_id=short_id,
+                error=str(e),
             )
 
 

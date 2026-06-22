@@ -50,3 +50,4 @@ data/session_log.md
 .vscode/
 .idea/
 .DS_Store
+data/tiktok_token*.json

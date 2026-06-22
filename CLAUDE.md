@@ -119,12 +119,41 @@ cron에서 제거** (영빈 결정 2026-05-13): 영빈이 어떤 미드폼을 �
    게시 7일+ 숏츠 YouTube Analytics → `calibration` 테이블 row. 다음 분석부터
    `latest_calibration()` fetch로 자동 적용.
 
-### 미드폼 수동 trigger (영빈이 cron 외부에서 호출)
-영빈이 숏츠화할 미드폼 youtube_id를 주면:
-- 단건: `uv run scripts/run_pipeline.py --video-id <yt_id>`
-- 다건 배치: `scripts/run_backlog.py` 패턴 (BACKLOG 리스트 inline)
-- 처리 흐름: ingest → transcribe → analyze (Gemini + retention) → 노션 'proposed' push
-- 다음 cron에서 영빈 ✅한 모먼트만 자동 후처리.
+### 미드폼 수동 trigger — 영빈 Claude Code 세션 (★ 권장)
+영빈이 Claude Code 세션에서 미드폼 youtube_id 또는 internal_id를 주면 **Claude Code가
+에이전트 path로 처리**. 절대 `run_pipeline.py` / `run_backlog.py` / `scripts/analyze.py`를
+호출하지 말 것 — 이들은 `analyze()` 직접 호출 → Gemini 모먼트 추출이라 에이전트 path 우회.
+
+**올바른 워크플로우 (Claude Code 메인이 수행):**
+1. `scripts/ingest_transcribe.py --youtube-id <id>` — yt-dlp + WhisperX (스크립트 OK, Gemini 안 부름)
+2. **`golf-moment-researcher` 에이전트** — transcript에서 후보 10~15개
+3. **`golf-moment-curator` 에이전트** — final 5~8개 + scene_kind/copy1/copy2
+4. SQLite shorts insert + `data/analyses/<youtube_id>.json` cache 작성 (`AnalysisResult` 포맷)
+   + 노션 'proposed' push (참고: `scripts/_persist_p021_agent_moments.py` 패턴)
+5. 영빈 노션 ✅/❌
+
+### 모먼트 승인 후 처리 (영빈 Claude Code 세션)
+영빈이 노션 ✅ 후 "처리해줘" 하면 Claude Code 메인이 수행:
+1. `poll_status_from_notion('ko')` — 노션 ✅ → SQLite status='approved'
+2. `process_approved(skip_publish_meta=True)` — scene + ffmpeg + status='generated',
+   `publish_meta_json`은 NULL로 둠 (★ Gemini publish_meta 호출 막음)
+3. SQLite에서 `status='generated' AND publish_meta_json IS NULL` 모먼트들 fetch
+4. **`golf-publish-meta-writer` 에이전트 병렬 호출** — 모먼트당 title/desc/tags/hashtags
+5. SQLite UPDATE `publish_meta_json` + `notion_update(page_id, 'generated', title=..., description=...)`
+
+### 게시 (영빈 Claude Code 세션)
+영빈이 "예약 걸어줘" 또는 "게시해" 명시 후에만:
+- `publish_ready(skip_gemini_fallback=True)` — R2 + YouTube 예약. `publish_meta_json` NULL이면
+  error 표시 (Gemini 호출 안 함).
+- 절대 자동 호출 금지 (CLAUDE.md "Never Do" 참고).
+
+### Cron path (자동, Gemini fallback 유지)
+영빈 PC Windows Task Scheduler가 12:20 KST에 `run_daily.py` 호출. cron에서는 에이전트
+호출 불가하므로 Gemini fallback 그대로 사용:
+- Step 2: `process_approved()` (skip_publish_meta=False 기본) → Gemini publish_meta
+- Step 4: `publish_ready()` (skip_gemini_fallback=False 기본) → publish_meta_json 비었으면 Gemini fallback
+
+→ **이중 path 보장**: cron 자동화는 Gemini로 끊김 없음, Claude Code 세션은 에이전트로 품질 보장.
 
 ### 상태 머신 (`shorts.status`)
 `proposed` → (영빈 ✅) → `approved` → (ffmpeg+메타) → `generated` →
@@ -157,8 +186,10 @@ $env:TARGET_INTERNAL_IDS = "26-P002-S04"  # 콤마 구분 여러 개 가능
 `DRY_RUN=true` env로 실제 게시 X (통신 검증용).
 
 ### 게시 전 메타 override 우선순위 (publish.py `_resolve_meta`)
-1. 노션 Title/Description (영빈 수정값) → 2. SQLite `publish_meta_json` (Gemini
-캐시) → 3. Gemini 즉시 재생성. 영빈 수정값이 항상 최상위.
+1. 노션 Title/Description (영빈 수정값) → 2. SQLite `publish_meta_json` (Gemini 또는
+   에이전트 캐시) → 3. Gemini 즉시 재생성 (cron path만; Claude Code path는
+   `skip_gemini_fallback=True`로 막음).
+영빈 수정값이 항상 최상위.
 
 ### 모먼트 개수 알고리즘 (analyze.py `_dynamic_max_moments`)
 영상 종류와 길이로 모먼트 상한 N 결정 후 Gemini에 "top N개" 요청:
@@ -190,10 +221,14 @@ Gemini가 transcript의 `[start-end]` 라벨에서 `end`값을 다음 hook 시�
   내 chain, 기타 strategy는 `-af` 옵션.
 
 ### dynamic scene (face_centered_dynamic)
-- segments 4-tuple `(start, end, cx, face_count)`. face_count는 `_build_segments`가
-  YOLOv8-face로 측정한 frame별 face_count의 segment 최빈값.
-- segment 별 처리: face_count==1 → cover scale crop (1명 close-up), face_count>=2 또는
-  ==0 또는 face_area<1% → wide letterbox 6:4 (시연/multi-person, padding 검정).
+- segments 4-tuple `(start, end, cx, face_count)`. 현재 `classify_scene_with_metrics`는
+  face detection skip하고 항상 `(face_centered_dynamic, 0.5, [(0, dur, 0.5, 2)])` 반환
+  (2026-06-05 영빈 결정 — 모드 플리커 회피).
+- segment 별 처리:
+  - face_count==1 → cover scale crop (1명 close-up). 현재 룰에선 거의 안 쓰임.
+  - face_count>=2 / ==0 / face_area<1% → **blur padding** (2026-06-18 적용). 1080×1350 영역에
+    영상을 `crop ih*1.5:ih → scale 1080:-2`로 fit + 배경은 같은 영상을 `scale 1080:1350` + `boxblur=40:2`로 채움.
+    검정 padding은 폐기 (YouTube/TikTok 공식 가이드: 검정 바 = "Shorts 아님" 시그널, retention 직격).
 - segment 사이 `XFADE_DURATION=0.3s` cross-fade + 끝 연장으로 어미 안 잘림.
 - approve.py `process_approved`가 3-tuple legacy segments 자동 감지 → rescan으로 갱신.
 
@@ -226,14 +261,19 @@ uv run ruff format                                 # Format
 ## Key Commands
 
 ### CLI 엔트리
-- `uv run scripts/run_daily.py` - **6단계 cron 수동 실행** (디버깅용)
+**cron path (Gemini 사용 — 자동화용, 영빈 PC가 매일 실행):**
+- `uv run scripts/run_daily.py` - 6단계 cron 수동 실행 (디버깅용)
 - `uv run scripts/run_daily.py --dry-run` - 흐름만 표시, 실 처리 X
-- `uv run scripts/run_pipeline.py --video-id <youtube_id>` - 단일 영상 end-to-end
-- `uv run scripts/ingest_transcribe.py --video-id <id>` - 수집+전사만
-- `uv run scripts/analyze.py --video-id <id>` - Gemini 모먼트 추출만
-- `uv run scripts/sync_notion.py` - 노션 ↔ SQLite 단발 sync
+
+**Claude Code path (에이전트 사용 — 영빈 대화 중 호출):**
+- `uv run scripts/ingest_transcribe.py --youtube-id <id>` - yt-dlp + WhisperX. **Gemini 안 부름, 안전.**
+- `uv run scripts/sync_notion.py` - 노션 ↔ SQLite 단발 sync. Gemini 안 부름, 안전.
 - `uv run scripts/test_template.py <path>` - 시그니처 레이아웃 시각 테스트
 - `uv run scripts/calibrate.py` - 채널 percentile 70 score 재계산
+
+**⚠️ Claude Code 세션에서 호출 금지 (Gemini 자동 trigger):**
+- `scripts/run_pipeline.py` / `scripts/run_backlog.py` / `scripts/analyze.py` — 다 `analyze()` 호출함.
+  영상 처리 시 위 ingest_transcribe + `golf-moment-researcher/curator` 에이전트 path 사용할 것.
 
 ### Slash 명령 (.claude/commands/)
 - `/run-phase <N>` - Phase N 작업 시작
@@ -281,13 +321,22 @@ When spawning subagents, always pass the relevant skill into the agent's prompt.
 
 When the task fits one of these domains, delegate to the matching subagent:
 
+**도메인 작업:**
 - **planner**: Phase 시작 시 구현 계획 수립
 - **python-reviewer**: Python 코드 작성/수정 후 리뷰
 - **harness-optimizer**: 하네스 자체 개선
 - **video-engineer**: FFmpeg, OpenCV, MediaPipe 작업
-- **ai-analyst**: Gemini 프롬프트, transcript 분석, scene 분류
+- **ai-analyst**: Gemini 프롬프트, transcript 분석, scene 분류 (코드 변경 시)
 - **api-integrator**: YouTube/Notion/Buffer 통합
 - **test-engineer**: pytest, 검증, eval 케이스
+
+**SwingCrew 콘텐츠 파이프라인 (Claude Code path, opus):**
+- **golf-moment-researcher**: WhisperX transcript → 후보 10~15개 (start/end/score/theme/reasoning).
+  Claude Code 세션에서 모먼트 추출 시 첫 단계.
+- **golf-moment-curator**: 후보 풀 → final 5~8개 + scene_kind + copy1/copy2/hook_text.
+  NMS + 다양성 + setup-tone 강제. researcher 직후 호출.
+- **golf-publish-meta-writer**: 모먼트 1개 → title/description/tags/hashtags (KO/EN).
+  `process_approved(skip_publish_meta=True)` 후 모먼트별 병렬 호출.
 
 ## Never Do
 
@@ -299,3 +348,11 @@ When the task fits one of these domains, delegate to the matching subagent:
 - Skip writing a verification step (Behavioral #4)
 - **`publish_ready()` / YouTube upload / R2 upload 자동 호출 금지** — 영빈 명시
   ("예약 걸어줘"/"게시해") 후에만. `process_approved` (mp4 + 메타)까지가 자동 한계.
+- **Claude Code 세션에서 Gemini 자동 호출 금지** — 영빈이 의도적으로 에이전트 path를
+  사용하는데 다음 함수 호출하면 Gemini 자동 발동:
+  - `analyze()` (Gemini 모먼트 추출) → `golf-moment-researcher` + `golf-moment-curator` 에이전트로
+  - `process_approved()` (Gemini publish_meta) → `process_approved(skip_publish_meta=True)` +
+    `golf-publish-meta-writer` 에이전트로
+  - `publish_ready()` (Gemini publish_meta fallback) → `publish_ready(skip_gemini_fallback=True)`
+  - `run_pipeline.py` / `run_backlog.py` / `scripts/analyze.py` 호출 금지 — 다 analyze() 직접
+    호출하므로 Gemini path 우회 불가.

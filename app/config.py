@@ -1,4 +1,5 @@
 """환경 변수 단일 진입점 (pydantic-settings)."""
+
 from pathlib import Path
 
 from pydantic import field_validator
@@ -45,7 +46,7 @@ class Settings(BaseSettings):
     gemini_min_gap_sec: float = 30.0
     gemini_temperature: float = 0.3
     gemini_max_prompt_chars: int = 80_000
-    gemini_request_timeout_sec: int = 60
+    gemini_request_timeout_sec: int = 180
 
     # Phase 4: YouTube OAuth + Retention + Scene + Scoring
     youtube_oauth_client_id: str = ""

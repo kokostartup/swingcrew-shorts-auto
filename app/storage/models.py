@@ -103,8 +103,8 @@ class MagicMoment(BaseModel):
     def _check_time_range(self) -> "MagicMoment":
         if self.end_sec <= self.start_sec:
             raise ValueError(f"end_sec ({self.end_sec}) must be > start_sec ({self.start_sec})")
-        if self.end_sec - self.start_sec > 80:
-            raise ValueError(f"duration ({self.end_sec - self.start_sec}s) must be ≤ 80s")
+        if self.end_sec - self.start_sec > 90:
+            raise ValueError(f"duration ({self.end_sec - self.start_sec}s) must be ≤ 90s")
         return self
 
 

@@ -3,6 +3,7 @@
 영빈 Scheduled At은 큐 모드(`addToQueue`)에선 직접 사용되지 않음.
 Buffer 대시보드에서 영빈이 미리 설정한 스케줄 슬롯대로 자동 게시.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -52,7 +53,10 @@ def _graphql(query: str, variables: dict[str, Any] | None = None) -> dict[str, A
         payload["variables"] = variables
     try:
         resp = httpx.post(
-            BUFFER_GRAPHQL_URL, json=payload, headers=_headers(), timeout=60,
+            BUFFER_GRAPHQL_URL,
+            json=payload,
+            headers=_headers(),
+            timeout=60,
         )
     except httpx.HTTPError as e:
         raise BufferError(f"network error: {e}") from e
@@ -84,7 +88,8 @@ def _get_organization_id() -> str:
     _organization_id = str(orgs[0]["id"])
     log.info(
         "buffer.organization_resolved",
-        organization_id=_organization_id, name=orgs[0]["name"],
+        organization_id=_organization_id,
+        name=orgs[0]["name"],
     )
     return _organization_id
 
@@ -126,29 +131,46 @@ def get_channels_by_service() -> dict[str, str]:
     reraise=True,
 )
 def create_video_post(
-    *, channel_id: str, text: str, video_url: str, service: str | None = None,
+    *,
+    channel_id: str,
+    text: str,
+    video_url: str,
+    service: str | None = None,
+    scheduled_at_utc: str | None = None,
+    share_now: bool = False,
 ) -> str:
-    """Buffer 큐에 영상 post 추가 → post id 반환.
+    """Buffer 영상 post 생성 → post id 반환.
 
-    mode=addToQueue: 영빈이 Buffer에 미리 설정한 schedule 슬롯에 따라 자동 게시.
+    Mode 결정 우선순위:
+      share_now=True — `mode=shareNow` (즉시 게시. dueAt/큐 무관). 테스트/수동 게시용.
+      scheduled_at_utc 있음 — `mode=customScheduled` (정확한 시각 자동 게시).
+      둘 다 None/False — `mode=addToQueue` (Buffer 큐 자동 슬롯 일정).
     service='instagram' → metadata.instagram.type=reel (Reels로 게시).
     """
     mutation = (
         "mutation CreatePost($input: CreatePostInput!) {"
         " createPost(input: $input) {"
         " __typename"
-        " ... on PostActionSuccess { post { id text } }"
+        " ... on PostActionSuccess { post { id text dueAt } }"
         " ... on MutationError { message }"
         " }"
         "}"
     )
+    # Buffer GraphQL CreatePostInput.assets: [AssetInput!]! — list of AssetInput.
+    # AssetInput.video: VideoAssetInput { url, thumbnailUrl, metadata }.
     input_data: dict[str, Any] = {
         "text": text,
         "channelId": channel_id,
         "schedulingType": "automatic",
-        "mode": "addToQueue",
-        "assets": {"videos": [{"url": video_url}]},
+        "assets": [{"video": {"url": video_url}}],
     }
+    if share_now:
+        input_data["mode"] = "shareNow"
+    elif scheduled_at_utc:
+        input_data["mode"] = "customScheduled"
+        input_data["dueAt"] = scheduled_at_utc
+    else:
+        input_data["mode"] = "addToQueue"
     if service == "instagram":
         input_data["metadata"] = {
             "instagram": {"type": "reel", "shouldShareToFeed": True},
@@ -162,8 +184,12 @@ def create_video_post(
     post_id = str(post.get("id", ""))
     log.info(
         "buffer.post_created",
-        channel_id=channel_id, service=service,
-        post_id=post_id, text_len=len(text),
+        channel_id=channel_id,
+        service=service,
+        post_id=post_id,
+        text_len=len(text),
+        scheduled=bool(scheduled_at_utc),
+        due_at=post.get("dueAt"),
     )
     return post_id
 

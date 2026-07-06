@@ -2,6 +2,7 @@
 
 Buffer는 외부 URL만 받으므로 영빈 PC 로컬 mp4를 R2에 업로드 후 public URL 반환.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -33,7 +34,8 @@ def _get_client() -> Any:
     if _client is not None:
         return _client
     missing = [
-        k for k, v in {
+        k
+        for k, v in {
             "R2_ACCOUNT_ID": settings.r2_account_id,
             "R2_ACCESS_KEY_ID": settings.r2_access_key_id,
             "R2_SECRET_ACCESS_KEY": settings.r2_secret_access_key,
@@ -84,8 +86,10 @@ def upload_video(local_path: Path, key: str | None = None) -> str:
     public_url = f"{settings.r2_public_url.rstrip('/')}/{object_key}"
     log.info(
         "r2.upload_done",
-        bucket=settings.r2_bucket, key=object_key,
-        size=local_path.stat().st_size, public_url=public_url,
+        bucket=settings.r2_bucket,
+        key=object_key,
+        size=local_path.stat().st_size,
+        public_url=public_url,
     )
     return public_url
 
@@ -98,6 +102,24 @@ def object_exists(key: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def list_object_keys(prefix: str = "") -> list[str]:
+    """R2 버킷의 모든 object key 반환 (paginated). prefix로 필터 가능."""
+    client = _get_client()
+    keys: list[str] = []
+    token: str | None = None
+    while True:
+        params: dict[str, Any] = {"Bucket": settings.r2_bucket, "Prefix": prefix}
+        if token:
+            params["ContinuationToken"] = token
+        resp = client.list_objects_v2(**params)
+        for obj in resp.get("Contents", []) or []:
+            keys.append(obj["Key"])
+        if not resp.get("IsTruncated"):
+            break
+        token = resp.get("NextContinuationToken")
+    return keys
 
 
 def delete_object(key: str) -> bool:
@@ -119,4 +141,4 @@ def delete_object(key: str) -> bool:
     return True
 
 
-__all__ = ["R2Error", "delete_object", "object_exists", "upload_video"]
+__all__ = ["R2Error", "delete_object", "list_object_keys", "object_exists", "upload_video"]

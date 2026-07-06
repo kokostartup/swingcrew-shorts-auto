@@ -180,6 +180,56 @@ def _publish_one_moment(page: dict[str, Any]) -> tuple[bool, dict[str, str]]:
     return success, results
 
 
+def _should_process(page: dict[str, Any]) -> bool:
+    """이번 실행에서 실제 게시 처리할 page인지."""
+    sched = page.get("scheduled_at")
+    if not sched:
+        return False
+    if TARGET_INTERNAL_IDS:
+        return _internal_id_from_page(page["id"]) in TARGET_INTERNAL_IDS
+    return SKIP_TIME_FILTER or _within_slot(sched)
+
+
+def _cleanup_previous_slot_r2(pages_to_process: list[dict[str, Any]]) -> None:
+    """이번 실행에서 처리할 iid mp4만 keep, R2의 나머지 mp4 삭제.
+
+    이전 슬롯 mp4(=지난 슬롯에서 게시 끝난 것)를 다음 슬롯 실행 때 정리하는 방식.
+    TikTok 등 platform 실패 시 재시도 window 확보 (다음 슬롯 실행까지 ~4h).
+    TARGET_INTERNAL_IDS 지정 시(수동 catch-up) 정리 skip — 미래 슬롯 mp4 아직 필요.
+    DRY_RUN 시에도 skip — 로컬 검증에서 실제 R2 삭제되면 안 됨.
+    """
+    if TARGET_INTERNAL_IDS or DRY_RUN:
+        return
+    keep_iids: set[str] = {
+        iid for p in pages_to_process if (iid := _internal_id_from_page(p["id"]))
+    }
+    try:
+        keys = r2.list_object_keys()
+    except Exception as e:
+        log.warning("publish_socials.r2_list_failed", error=str(e))
+        return
+    deleted = 0
+    for key in keys:
+        if not key.endswith(".mp4"):
+            continue
+        iid = key[:-4]
+        if iid in keep_iids:
+            continue
+        try:
+            r2.delete_object(key)
+            deleted += 1
+        except Exception as e:
+            log.warning(
+                "publish_socials.r2_cleanup_failed",
+                key=key,
+                error=str(e),
+            )
+    print(
+        f"R2 cleanup: deleted {deleted} prev-slot mp4 (kept {len(keep_iids)})",
+        flush=True,
+    )
+
+
 def main() -> None:
     print("=== publish_socials_from_notion start ===", flush=True)
     print(f"SKIP_TIME_FILTER={SKIP_TIME_FILTER}", flush=True)
@@ -194,6 +244,9 @@ def main() -> None:
     if TARGET_INTERNAL_IDS:
         pages.extend(list_pages_by_status("published"))
     print(f"candidate pages from Notion: {len(pages)}", flush=True)
+
+    # 이번 슬롯 시작 시 이전 슬롯 mp4 정리 (실제 처리할 iid 외 다 삭제).
+    _cleanup_previous_slot_r2([p for p in pages if _should_process(p)])
 
     processed = 0
     success = 0
@@ -237,18 +290,8 @@ def main() -> None:
                         page_id=page["id"],
                         error=str(e),
                     )
-            # 모든 social 게시 + 노션 'published' 전환 끝 → R2 mp4 source 불필요 → 삭제.
-            # 삭제 실패해도 게시 자체는 끝났으므로 swallow.
-            iid = _internal_id_from_page(page["id"])
-            if iid:
-                try:
-                    r2.delete_object(f"{iid}.mp4")
-                except Exception as e:
-                    log.warning(
-                        "publish_socials.r2_delete_failed",
-                        iid=iid,
-                        error=str(e),
-                    )
+            # R2 mp4는 다음 슬롯 실행 시 정리 (main() 초반 _cleanup_previous_slot_r2)
+            # → TikTok 등 일부 platform 실패 시 재시도 window 확보 (~4시간).
         else:
             print("  FAIL — all platforms errored", flush=True)
         for platform, url in urls.items():

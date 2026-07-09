@@ -1,4 +1,5 @@
 """Phase 5 Notion 어댑터 테스트."""
+
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -21,19 +22,28 @@ from app.storage.models import MagicMoment, Video
 
 def _mk_video() -> Video:
     return Video(
-        id=1, youtube_id="abcdefghij1", title="t", duration=600,
+        id=1,
+        youtube_id="abcdefghij1",
+        title="t",
+        duration=600,
         local_path=Path("data/samples/abcdefghij1.mp4"),
     )
 
 
 def _mk_moment(
-    start: float = 25.6, end: float = 51.0,
+    start: float = 25.6,
+    end: float = 51.0,
     scene: str | None = "letterbox_4_5",
 ) -> MagicMoment:
     return MagicMoment(
-        start_sec=start, end_sec=end,
-        hook_text="hook", copy1="copy1", copy2="copy2",
-        score=8.0, reasoning="why", scene_type=scene,
+        start_sec=start,
+        end_sec=end,
+        hook_text="hook",
+        copy1="copy1",
+        copy2="copy2",
+        score=8.0,
+        reasoning="why",
+        scene_type=scene,
         final_score=8.5,
     )
 
@@ -83,10 +93,7 @@ def test_time_range_format() -> None:
 
 
 def test_youtube_timestamp_url_integer_seconds() -> None:
-    assert (
-        _youtube_timestamp_url("abcdefghij1", 25.6)
-        == "https://youtu.be/abcdefghij1?t=25s"
-    )
+    assert _youtube_timestamp_url("abcdefghij1", 25.6) == "https://youtu.be/abcdefghij1?t=25s"
 
 
 def test_youtube_timestamp_url_zero() -> None:
@@ -112,7 +119,10 @@ def test_moment_properties_omits_scene_type_when_none() -> None:
 
 def test_moment_properties_includes_internal_id_from_video() -> None:
     video = Video(
-        id=1, youtube_id="abcdefghij1", title="t", duration=600,
+        id=1,
+        youtube_id="abcdefghij1",
+        title="t",
+        duration=600,
         internal_id="26-B005",
         local_path=Path("data/samples/abcdefghij1.mp4"),
     )
@@ -128,8 +138,13 @@ def test_moment_properties_omits_internal_id_when_video_has_none() -> None:
 
 def test_moment_properties_uses_gemini_score_when_no_final() -> None:
     m = MagicMoment(
-        start_sec=0, end_sec=30, hook_text="h", copy1="c1", copy2="c2",
-        score=7.7, reasoning="r",
+        start_sec=0,
+        end_sec=30,
+        hook_text="h",
+        copy1="c1",
+        copy2="c2",
+        score=7.7,
+        reasoning="r",
     )
     props = _moment_properties(_mk_video(), m)
     assert props["Score"]["number"] == 7.7
@@ -137,8 +152,13 @@ def test_moment_properties_uses_gemini_score_when_no_final() -> None:
 
 def test_moment_properties_truncates_reasoning() -> None:
     m = MagicMoment(
-        start_sec=0, end_sec=30, hook_text="h", copy1="c1", copy2="c2",
-        score=5.0, reasoning="x" * 3000,
+        start_sec=0,
+        end_sec=30,
+        hook_text="h",
+        copy1="c1",
+        copy2="c2",
+        score=5.0,
+        reasoning="x" * 3000,
     )
     props = _moment_properties(_mk_video(), m)
     text = props["Reasoning"]["rich_text"][0]["text"]["content"]
@@ -153,11 +173,13 @@ def fake_client(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """notion-client lazy init을 우회 + token/db_id + data_source_id 캐시 셋업."""
     monkeypatch.setattr("app.config.settings.notion_token", "fake-token")
     monkeypatch.setattr(
-        "app.config.settings.notion_shorts_db_id", "fake-db-id",
+        "app.config.settings.notion_shorts_db_id",
+        "fake-db-id",
     )
     monkeypatch.setattr("app.integrations.notion._client", None)
     monkeypatch.setattr(
-        "app.integrations.notion._data_source_id", "fake-ds-id",
+        "app.integrations.notion._data_source_ids",
+        {"ko": "fake-ds-id", "en": "fake-ds-id"},
     )
     client = MagicMock()
     monkeypatch.setattr("app.integrations.notion._get_client", lambda: client)

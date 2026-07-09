@@ -17,8 +17,6 @@ import sqlite3
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
-from app.config import settings
-from app.integrations import buffer as buffer_api
 from app.integrations import r2
 from app.integrations.notion import fetch_page_meta as notion_fetch_page_meta
 from app.integrations.notion import update_status as notion_update
@@ -176,10 +174,9 @@ def _publish_one(
 
     # 1. R2 업로드 — ko 채널만. EN 채널은 YouTube only(FB/IG/Threads 안 함)이라 R2 fetch
     #    수요 0 → 업로드 자체 skip (스토리지/시간 절약).
-    r2_url: str | None = None
     if channel == "ko":
         try:
-            r2_url = _upload_r2(internal_id, Path(generated_path))
+            _upload_r2(internal_id, Path(generated_path))
         except Exception as e:
             log.warning("publish.r2_upload_failed", short_id=short_id, error=str(e))
             _mark_error(conn, short_id, page_id, f"r2_upload_failed: {e}")

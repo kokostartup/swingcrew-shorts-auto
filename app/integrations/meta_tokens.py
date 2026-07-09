@@ -12,12 +12,11 @@ cron 통합 — `refresh_if_needed()` 호출하면 만료 임박한 token만 자
 """
 from __future__ import annotations
 
+import logging
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-
-import logging
 
 import httpx
 

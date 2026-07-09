@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import re
 import sys
-from pathlib import Path
 
 import click
 
@@ -153,7 +152,7 @@ def main(internal_id: str | None, prefix: str | None) -> None:
             _process_one(iid)
         except Exception as e:
             print(f"{iid}: FAIL — {e}\n", flush=True)
-    print(f"=== done ===", flush=True)
+    print("=== done ===", flush=True)
 
 
 if __name__ == "__main__":

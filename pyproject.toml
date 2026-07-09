@@ -65,6 +65,8 @@ explicit = true
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# 1회용 스크립트 아카이브 — 완료된 작업 기록용, lint 대상 아님
+extend-exclude = ["scripts/_archive"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "N"]

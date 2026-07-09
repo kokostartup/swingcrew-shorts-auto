@@ -51,3 +51,12 @@ data/session_log.md
 .idea/
 .DS_Store
 data/tiktok_token*.json
+
+# ultralytics 자동 다운로드 가중치 (framing-director cx 실측용)
+yolov8n.pt
+
+# 풀스크린 framing spec — 세션 생성 캐시 (analyses와 동일 취급)
+data/framing/
+
+# 외부 아카이브
+*.zip

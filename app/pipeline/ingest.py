@@ -93,14 +93,22 @@ def _fetch_metadata(youtube_id: str) -> dict[str, Any]:
     retry=retry_if_exception_type(subprocess.CalledProcessError),
 )
 def _download(youtube_id: str, output: Path) -> None:
-    """yt-dlp로 1080p mp4 + m4a 다운로드 + merge."""
+    """yt-dlp로 최대 4K mp4 + m4a 다운로드 + merge.
+
+    영빈 결정 2026-07-09: 풀스크린 9:16 crop 화질 확보를 위해 4K 우선
+    (1080p 소스는 crop 후 2배 업스케일로 화질 열화). YouTube 4K는 AV1(mp4)/VP9만
+    제공되므로 mp4 우선 → 없으면 코덱 무관 최고 화질 → 1080p fallback.
+    """
     url = f"https://www.youtube.com/watch?v={youtube_id}"
     output.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         "yt-dlp",
         "--no-playlist",
         *_ytdlp_cookies_args(),
-        "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]",
+        "-f",
+        "bestvideo[height<=2160][ext=mp4]+bestaudio[ext=m4a]"
+        "/bestvideo[height<=2160]+bestaudio"
+        "/best[height<=1080]",
         "--merge-output-format", "mp4",
         "-o", str(output),
         "--", url,

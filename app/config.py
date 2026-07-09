@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     # Phase 2: ingest + transcribe
     samples_dir: Path = Path("data/samples")
     transcripts_dir: Path = Path("data/transcripts")
+    # P시리즈 풀스크린 변형 framing spec (framing-director + subtitle-editor 출력)
+    framing_dir: Path = Path("data/framing")
     # yt-dlp가 YouTube 봇 차단 우회용 브라우저 cookies 사용. 빈 값이면 옵션 안 붙임.
     # 예: 'chrome', 'safari', 'firefox'. macOS는 처음 호출 시 Keychain 권한 prompt.
     yt_dlp_browser_cookies: str = ""

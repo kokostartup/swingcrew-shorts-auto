@@ -257,6 +257,22 @@ def process_approved(*, skip_publish_meta: bool = False) -> int:
             page_id = row["notion_page_id"]
             video_internal_id = row["video_internal_id"]
 
+            # P시리즈(ko)는 풀스크린 변형 전용 (영빈 결정 2026-07-09) —
+            # framing spec은 Claude Code 세션의 framing-director 에이전트가 만들므로
+            # cron path에서는 렌더하지 않고 approved로 남겨둔다 (legacy 포맷 방지).
+            # 렌더는 scripts/render_fullscreen.py가 담당.
+            if (
+                row["channel"] == "ko"
+                and video_internal_id
+                and "-P" in video_internal_id
+            ):
+                log.info(
+                    "approve.skip_p_series_fullscreen",
+                    short_id=short_id,
+                    internal_id=row["internal_id"] or video_internal_id,
+                )
+                continue
+
             cached = load_cached_analysis(youtube_id)
             if cached is None:
                 _mark_error(conn, short_id, page_id, "analysis_cache_missing")

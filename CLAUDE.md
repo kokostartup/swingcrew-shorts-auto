@@ -110,8 +110,8 @@ cron에서 제거** (영빈 결정 2026-05-13): 영빈이 어떤 미드폼을 �
    다음 빈 슬롯 할당. 슬롯: 매일 KST 07/11/17/20시, 최소 24h 검토 lead 보장
    (`MIN_LEAD_HOURS=24`). 노션 Scheduled At 컬럼도 동시 업데이트.
 4. **YouTube 예약 게시** — Scheduled At 있는 `status='generated'` 모먼트 → R2 업로드(ko만) +
-   YouTube private + publishAt 예약 → `status='scheduled'`. FB/IG/Threads는 별도 흐름
-   (아래 "슬롯 게시 흐름" 참고). TikTok은 Buffer queue로 영빈이 수동 처리.
+   YouTube private + publishAt 예약 → `status='scheduled'`. FB/IG/Threads/TikTok은
+   슬롯 시각 cron에서 자동 게시 (아래 "슬롯 게시 흐름" 참고). 영빈 수동 작업 없음.
    EN 채널은 YouTube only — R2 업로드 자체 skip (FB/IG/Threads/Buffer 안 함).
 5. **자동 거절** — `pushed_at`이 7일 이상 지났는데 영빈이 ✅ 안 한 'proposed'
    모먼트 → 자동 `rejected`.
@@ -129,17 +129,41 @@ cron에서 제거** (영빈 결정 2026-05-13): 영빈이 어떤 미드폼을 �
 2. **`golf-moment-researcher` 에이전트** — transcript에서 후보 10~15개
 3. **`golf-moment-curator` 에이전트** — final 5~8개 + scene_kind/copy1/copy2
 4. SQLite shorts insert + `data/analyses/<youtube_id>.json` cache 작성 (`AnalysisResult` 포맷)
-   + 노션 'proposed' push (참고: `scripts/_persist_p021_agent_moments.py` 패턴)
+   + 노션 'proposed' push (참고: `scripts/_archive/_persist_p021_agent_moments.py` 패턴 —
+   1회용 스크립트는 작업 후 `scripts/_archive/`로 이동)
 5. 영빈 노션 ✅/❌
 
 ### 모먼트 승인 후 처리 (영빈 Claude Code 세션)
 영빈이 노션 ✅ 후 "처리해줘" 하면 Claude Code 메인이 수행:
-1. `poll_status_from_notion('ko')` — 노션 ✅ → SQLite status='approved'
-2. `process_approved(skip_publish_meta=True)` — scene + ffmpeg + status='generated',
-   `publish_meta_json`은 NULL로 둠 (★ Gemini publish_meta 호출 막음)
+1. `scripts/poll_notion_status.py --channel ko` — 노션 ✅ → SQLite status='approved'.
+   ★ **`sync_notion.py --poll`은 폐기** (cron path 함수 풀세트를 호출해서 Gemini fallback 발동했던 사고 원인).
+   이 스크립트는 `poll_status_from_notion`만 호출 → process_approved/publish_ready import도 안 함 → 안전.
+2. **렌더 — 시리즈 분기 (영빈 결정 2026-07-09):**
+   - **P시리즈 (ko) → 풀스크린 9:16 변형** (전 플랫폼 공통, 아래 섹션 참고):
+     a. **`golf-framing-director` 에이전트** — 샷 경계/크롭 cx(YOLO 실측)/패닝/히어로 결정
+     b. **`golf-subtitle-editor` 에이전트** — WhisperX 초안 → 문맥 단위 자막 교정
+     c. 두 출력 합쳐 `data/framing/<internal_id>.json` (FramingSpec) 저장
+     d. `scripts/render_fullscreen.py --internal-id <id>` — 렌더 + status='generated' +
+        노션 '생성'. 렌더 후 **컷 경계 프레임 추출 검수 필수**.
+     ※ `process_approved`는 ko P시리즈를 자동 skip (cron legacy 포맷 렌더 방지 가드).
+   - **B시리즈 → 기존 그대로**: `process_approved(skip_publish_meta=True)` — 검정 밴드
+     카피 + blur padding, 커버 없음 (영빈 결정: B는 기존 포맷 유지).
 3. SQLite에서 `status='generated' AND publish_meta_json IS NULL` 모먼트들 fetch
 4. **`golf-publish-meta-writer` 에이전트 병렬 호출** — 모먼트당 title/desc/tags/hashtags
 5. SQLite UPDATE `publish_meta_json` + `notion_update(page_id, 'generated', title=..., description=...)`
+
+### 풀스크린 9:16 변형 (P시리즈 전용, app/pipeline/fullscreen.py)
+- **구성**: 커버 카드 1.5초 (히어로 프레임 + 그라데이션 dim + 로고 락업 + 큰 카피,
+  첫 줄 노랑) → 본편 풀 9:16 (패딩 0, 원본 하단 자막 띠 크롭 제거, 교정 자막
+  재버닝 fontsize 74, **상단 카피 없음**). tpad 1.5초 freeze + 발화 1.5초 delay,
+  커버 동안 합성 리저 BGM fade-out (정식 BGM 파일 나오면 교체 — fullscreen.py TODO).
+- **커버 = 첫 프레임** → Buffer/TikTok 커버 자동 적용 (2026-06 SRP 썸네일 피드백 대응).
+- **소스 4K 필수** — ingest가 최대 2160p 다운로드. 1080p 소스는 크롭 후 2배 업스케일 화질 열화.
+- 파일 크기: 야외 4K 소스는 crf22 기준 ~120MB/90s까지 정상 (legacy 30MB 규칙 미적용,
+  `FULLSCREEN_SIZE_MB_PER_90S=130`).
+- **프레이밍 철칙** (.claude/agents/golf-framing-director.md): 샷 경계에서만 컷,
+  cx는 눈대중 금지 YOLO 실측, **액션 지점 고정 우선** (피사체 추적 패닝 남용 금지),
+  렌더 후 프레임 검수 없이 납품 금지.
 
 ### 게시 (영빈 Claude Code 세션)
 영빈이 "예약 걸어줘" 또는 "게시해" 명시 후에만:
@@ -163,7 +187,7 @@ cron에서 제거** (영빈 결정 2026-05-13): 영빈이 어떤 미드폼을 �
 
 ### 슬롯 게시 흐름 (Cloudflare Worker → GitHub Actions)
 YouTube는 `publish_ready`가 publishAt으로 예약하면 시각 도래 시 YouTube 자체가 게시.
-FB/IG/Threads는 외부 cron trigger가 필요:
+FB/IG/Threads/TikTok은 외부 cron trigger가 필요:
 
 1. **Cloudflare Worker cron** ([infra/cloudflare-worker/](infra/cloudflare-worker/)) — 매 슬롯 시각
    (07/11/17/20 KST) GitHub workflow_dispatch API 호출. GitHub schedule cron은 정각
@@ -171,10 +195,11 @@ FB/IG/Threads는 외부 cron trigger가 필요:
 2. **GitHub Actions** ([publish_slot.yml](.github/workflows/publish_slot.yml)) — workflow_dispatch만,
    schedule 제거됨. `publish_socials_from_notion.py` 실행.
 3. **publish_socials_from_notion.py** — 노션 'scheduled' 페이지 fetch → 현재 시각 ±15분
-   필터 → R2 URL fetch → FB/IG/Threads 게시 → 노션 status='게시' 전환 →
-   **R2 mp4 자동 삭제** (게시 끝나면 R2 fetch source 불필요 → 스토리지 정리).
-4. **TikTok**: Buffer queue로 영빈 PC에서 publish_ready 직후 수동 추가 (publish_socials에서 제거됨).
-5. **R2 catch-up cleanup**: `scripts/r2_cleanup_published.py` — hook 누락된 published mp4
+   필터 → R2 URL fetch → FB/IG/Threads 게시 + **TikTok Buffer shareNow 즉시 게시**
+   (2026-06-22 commit 38ce3b1로 추가, Buffer 예약 한도 10개 회피 목적) → 노션 status='게시'
+   전환 → **R2 mp4 자동 삭제** (게시 끝나면 R2 fetch source 불필요 → 스토리지 정리).
+   영빈 수동 작업 0개.
+4. **R2 catch-up cleanup**: `scripts/r2_cleanup_published.py` — hook 누락된 published mp4
    (또는 명시 `--keys`)를 일괄 삭제. `--channel ko` 노션 published 기준, `--channel en`
    SQLite 기준.
 
@@ -267,13 +292,17 @@ uv run ruff format                                 # Format
 
 **Claude Code path (에이전트 사용 — 영빈 대화 중 호출):**
 - `uv run scripts/ingest_transcribe.py --youtube-id <id>` - yt-dlp + WhisperX. **Gemini 안 부름, 안전.**
-- `uv run scripts/sync_notion.py` - 노션 ↔ SQLite 단발 sync. Gemini 안 부름, 안전.
+- `uv run scripts/sync_notion.py --push <youtube_id>` - 분석 캐시 → 노션 후보 push. Gemini 안 부름, 안전.
+- `uv run scripts/poll_notion_status.py --channel ko` - 노션 ✅/❌/Scheduled At → SQLite sync 전용.
+  Gemini/ffmpeg/게시 import도 안 함, 안전.
 - `uv run scripts/test_template.py <path>` - 시그니처 레이아웃 시각 테스트
 - `uv run scripts/calibrate.py` - 채널 percentile 70 score 재계산
 
 **⚠️ Claude Code 세션에서 호출 금지 (Gemini 자동 trigger):**
 - `scripts/run_pipeline.py` / `scripts/run_backlog.py` / `scripts/analyze.py` — 다 `analyze()` 호출함.
   영상 처리 시 위 ingest_transcribe + `golf-moment-researcher/curator` 에이전트 path 사용할 것.
+- `scripts/run_daily.py` — cron 전용. Step 2/4가 Gemini publish_meta + R2/YouTube 자동.
+  Claude Code 세션에선 절대 호출 금지 (디버그도 `--dry-run`만).
 
 ### Slash 명령 (.claude/commands/)
 - `/run-phase <N>` - Phase N 작업 시작
@@ -356,3 +385,7 @@ When the task fits one of these domains, delegate to the matching subagent:
   - `publish_ready()` (Gemini publish_meta fallback) → `publish_ready(skip_gemini_fallback=True)`
   - `run_pipeline.py` / `run_backlog.py` / `scripts/analyze.py` 호출 금지 — 다 analyze() 직접
     호출하므로 Gemini path 우회 불가.
+  - `run_daily.py` 호출 금지 — cron 전용. Step 2/4가 Gemini publish_meta + R2/YouTube.
+  - **`sync_notion.py --poll` 옵션은 제거됨** (2026-06-23) — 풀 파이프라인(process_approved +
+    publish_ready) 호출이라 "poll" 이름이 함정이었음. B014 처리 중 노션 sync만 하려다
+    Gemini 메타가 자동 작성된 사고 발생. 안전한 sync는 `scripts/poll_notion_status.py`.

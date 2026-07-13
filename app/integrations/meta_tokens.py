@@ -32,6 +32,9 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 ENV_PATH = Path(".env")
 REFRESH_THRESHOLD_DAYS = 7
+# GitHub Actions(publish_slot.yml)가 같은 토큰을 GitHub Secrets에서 읽으므로
+# 갱신 시 함께 동기화해야 함 — 2026-07-12 IG 토큰 만료로 2건 게시 실패 사고 원인.
+GITHUB_REPO = "kokostartup/swingcrew-shorts-auto"
 
 
 def _update_env(updates: dict[str, str]) -> None:
@@ -53,6 +56,35 @@ def _update_env(updates: dict[str, str]) -> None:
         if key not in seen:
             new_lines.append(f"{key}={val}")
     ENV_PATH.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+
+def _sync_github_secrets(updates: dict[str, str]) -> None:
+    """*_ACCESS_TOKEN 갱신값을 GitHub Secrets에도 반영 (best-effort).
+
+    로컬 .env만 갱신하면 GitHub Actions는 옛 토큰으로 게시를 계속 시도한다
+    (60일 후 반드시 만료 — 2026-07-12 사고). gh CLI 미설치/미인증 시 warning만.
+    """
+    import subprocess
+
+    for key, value in updates.items():
+        if not key.endswith("_ACCESS_TOKEN"):
+            continue
+        try:
+            r = subprocess.run(
+                ["gh", "secret", "set", key, "--repo", GITHUB_REPO, "--body", value],
+                capture_output=True, text=True, timeout=30,
+            )
+            if r.returncode == 0:
+                log.info("meta_tokens.github_secret_synced", key=key)
+            else:
+                log.warning(
+                    "meta_tokens.github_secret_sync_failed",
+                    key=key, stderr=r.stderr[:200],
+                )
+        except Exception as e:  # noqa: BLE001 — 동기화 실패해도 .env 갱신은 유효
+            log.warning(
+                "meta_tokens.github_secret_sync_failed", key=key, error=str(e),
+            )
 
 
 def _expires_at_iso(expires_in_sec: int) -> str:
@@ -215,12 +247,14 @@ def _try_exchange_or_assume_long_lived(
             env_token_key: result["access_token"],
             env_expires_key: _expires_at_iso(result["expires_in"]),
         })
+        _sync_github_secrets({env_token_key: result["access_token"]})
         log.info(f"meta_tokens.{platform}_exchanged", expires_in=result["expires_in"])
         return f"60일 token (expires_in={result['expires_in']}s)"
     except RuntimeError as e:
         msg = str(e)
         if any(f"subcode={s}" in msg for s in _ALREADY_LONG_LIVED_SUBCODES):
             _update_env({env_expires_key: _expires_at_iso(5184000)})  # 60일 가정
+            _sync_github_secrets({env_token_key: token})
             log.info(f"meta_tokens.{platform}_already_long_lived")
             return "이미 long-lived (60일 가정, 만료 7일 전 cron이 자동 refresh)"
         log.warning(f"meta_tokens.{platform}_exchange_failed", error=msg)
@@ -271,6 +305,7 @@ def refresh_if_needed(threshold_days: float = REFRESH_THRESHOLD_DAYS) -> dict[st
                     "INSTAGRAM_ACCESS_TOKEN": ig["access_token"],
                     "INSTAGRAM_TOKEN_EXPIRES_AT": _expires_at_iso(ig["expires_in"]),
                 })
+                _sync_github_secrets({"INSTAGRAM_ACCESS_TOKEN": ig["access_token"]})
                 results["instagram"] = f"refreshed (was {ig_exp:.1f}d → new 60d)"
                 log.info("meta_tokens.ig_refreshed", was_days_left=ig_exp)
             except Exception as e:
@@ -291,6 +326,7 @@ def refresh_if_needed(threshold_days: float = REFRESH_THRESHOLD_DAYS) -> dict[st
                     "THREADS_ACCESS_TOKEN": th["access_token"],
                     "THREADS_TOKEN_EXPIRES_AT": _expires_at_iso(th["expires_in"]),
                 })
+                _sync_github_secrets({"THREADS_ACCESS_TOKEN": th["access_token"]})
                 results["threads"] = f"refreshed (was {th_exp:.1f}d → new 60d)"
                 log.info("meta_tokens.threads_refreshed", was_days_left=th_exp)
             except Exception as e:

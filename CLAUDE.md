@@ -107,7 +107,9 @@ cron에서 제거** (영빈 결정 2026-05-13): 영빈이 어떤 미드폼을 �
 2. **ffmpeg + Gemini 메타** — `status='approved'` 모먼트를 ffmpeg로 잘라서 mp4
    생성 + Gemini로 Title/Description/태그 생성 + 노션 push → `status='generated'`.
 3. **Scheduled At 자동 할당** — `status='generated'` + `scheduled_at IS NULL`인 행에
-   다음 빈 슬롯 할당. 슬롯: 매일 KST 07/11/17/20시, 최소 24h 검토 lead 보장
+   다음 빈 슬롯 할당. 슬롯: 매일 KST 11/20시, 단 화/금은 20시 제외 — 미드폼
+   업로드(화/금 20시)와 알림 경쟁 시 조회수 중앙값 45% 하락 (2026-07-13 분석,
+   주 12슬롯 = 미드폼 주 2개 × 모먼트 5~8개 수급에 맞춤). 최소 24h 검토 lead 보장
    (`MIN_LEAD_HOURS=24`). 노션 Scheduled At 컬럼도 동시 업데이트.
 4. **YouTube 예약 게시** — Scheduled At 있는 `status='generated'` 모먼트 → R2 업로드(ko만) +
    YouTube private + publishAt 예약 → `status='scheduled'`. FB/IG/Threads/TikTok은
@@ -190,7 +192,7 @@ YouTube는 `publish_ready`가 publishAt으로 예약하면 시각 도래 시 You
 FB/IG/Threads/TikTok은 외부 cron trigger가 필요:
 
 1. **Cloudflare Worker cron** ([infra/cloudflare-worker/](infra/cloudflare-worker/)) — 매 슬롯 시각
-   (07/11/17/20 KST) GitHub workflow_dispatch API 호출. GitHub schedule cron은 정각
+   (11/20 KST) GitHub workflow_dispatch API 호출. GitHub schedule cron은 정각
    큐잉 지연/누락 잦아서 Cloudflare로 대체 (2026-05-14 결정).
 2. **GitHub Actions** ([publish_slot.yml](.github/workflows/publish_slot.yml)) — workflow_dispatch만,
    schedule 제거됨. `publish_socials_from_notion.py` 실행.

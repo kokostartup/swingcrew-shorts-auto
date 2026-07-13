@@ -1,5 +1,8 @@
 # Cloudflare Worker — SwingCrew 게시 cron trigger.
-# 4번/일 (07/11/17/20 KST) GitHub workflow_dispatch 호출.
+# 2번/일 (11/20 KST) GitHub workflow_dispatch 호출.
+# 영빈 결정 2026-07-13: 4슬롯 → 2슬롯 (07/17시 제거 — 성과 하위 슬롯,
+# 재고 수급 주 10~16개에 맞춤). 화/금 20시는 스케줄러가 할당 자체를 안 하므로
+# 워커는 매일 발사해도 무해 (±15분 필터가 빈 슬롯이면 no-op).
 
 name = "swingcrew-shorts-auto"
 main = "src/index.js"
@@ -7,14 +10,10 @@ compatibility_date = "2024-09-01"
 
 [triggers]
 # UTC 기준 — KST(+9) 환산:
-#   22:00 UTC = 07:00 KST (전날)
 #   02:00 UTC = 11:00 KST
-#   08:00 UTC = 17:00 KST
 #   11:00 UTC = 20:00 KST
 crons = [
-  "0 22 * * *",
   "0 2 * * *",
-  "0 8 * * *",
   "0 11 * * *",
 ]
 

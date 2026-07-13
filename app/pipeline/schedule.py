@@ -1,7 +1,8 @@
 """Phase 7 cron: Scheduled At 자동 채움.
 
 채널별 슬롯 (channel-aware):
-  - 한국 (ko): 매일 KST 07/11/17/20 (4슬롯)
+  - 한국 (ko): 매일 KST 11/20 (2슬롯) — 단 화/금은 20시 제외 (미드폼 업로드와
+    경쟁 회피, 주 12슬롯). 영빈 결정 2026-07-13 (재고 수급 주 10~16개에 맞춤).
   - 영어 (en): 매일 America/Los_Angeles wall clock 07/20 (2슬롯, DST 자동)
 """
 
@@ -18,8 +19,14 @@ log = get_logger(__name__)
 KST = timezone(timedelta(hours=9))
 LA = ZoneInfo("America/Los_Angeles")  # DST 자동 (PST/PDT)
 
-SLOT_HOURS_KST = [7, 11, 17, 20]
+SLOT_HOURS_KST = [11, 20]
 SLOT_HOURS_LA = [7, 20]  # 영어 채널: 미서부 morning + evening prime time
+
+# 미드폼 업로드 요일 (화/금 20시 KST) — 같은 시각 숏츠는 알림/초기 노출 경쟁으로
+# 조회수 중앙값 45% 하락 (2026-07-13 분석, 20시 화금 5,642 vs 나머지 10,384).
+# 해당 요일은 20시 슬롯을 미드폼에 양보 → ko는 화/금 11시 1회만.
+MIDFORM_WEEKDAYS_KO = (1, 4)  # 화=1, 금=4
+MIDFORM_CLASH_HOUR_KO = 20
 
 # channel별 timezone + 슬롯 시간.
 _CHANNEL_TZ: dict[str, ZoneInfo | timezone] = {"ko": KST, "en": LA}
@@ -66,6 +73,13 @@ def _candidate_slots(
     day = earliest.date()
     for _ in range(max_lookahead_days):
         for h in slot_hours:
+            # ko 화/금 20시는 미드폼 업로드와 겹침 → 슬롯에서 제외
+            if (
+                channel == "ko"
+                and h == MIDFORM_CLASH_HOUR_KO
+                and day.weekday() in MIDFORM_WEEKDAYS_KO
+            ):
+                continue
             slot = datetime(day.year, day.month, day.day, h, 0, tzinfo=tz)
             if slot > earliest:
                 slots.append(slot)

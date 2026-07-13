@@ -56,11 +56,13 @@ class FramingSpec(BaseModel):
 
     시간은 모두 source 초. crop_y0/crop_h는 1080p 기준 단위 (해상도별 자동 스케일).
     cover_lines는 1~3줄, 첫 줄 노랑/나머지 흰색 (seyugolf 레퍼런스 룰).
+    cuts가 비어 있으면 커버 카드 전용 spec (B시리즈 — 본편은 legacy 렌더 유지,
+    hero/cover_lines만 사용. 영빈 결정 2026-07-13).
     """
 
     crop_y0: int = 0
     crop_h: int = 966
-    cuts: list[CutSpec] = Field(min_length=1)
+    cuts: list[CutSpec] = Field(default_factory=list)
     hero_t: float
     hero_cx: float = Field(ge=0.0, le=1.0)
     cover_lines: list[str] = Field(min_length=1, max_length=3)
@@ -269,6 +271,101 @@ def render_cover_png(
     hero_raw.unlink(missing_ok=True)
 
 
+def render_cover_intro(
+    video_path: Path,
+    spec: FramingSpec,
+    body_mp4: Path,
+    output: Path,
+    *,
+    size_mb_per_90s: float = 30.0,
+) -> None:
+    """이미 렌더된 1080×1920 본편 앞에 커버 카드 1.5초를 얹는다 (B시리즈용).
+
+    본편 첫 프레임 freeze 위에 커버 오버레이 + 발화 1.5초 delay + BGM —
+    P시리즈 커버와 동일한 UX, 본편 포맷(밴드 카피 + blur padding)은 그대로.
+    커버 히어로 프레임은 원본 영상(video_path)에서 9:16 풀 크롭.
+    """
+    from app.utils.video import ffprobe_meta
+
+    src_w, src_h = probe_dimensions(video_path)
+    scale = src_h / 1080
+    crop_h = int(spec.crop_h * scale)
+    crop_y0 = int(spec.crop_y0 * scale)
+    crop_w = int(crop_h * 9 / 16)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    cover_png = output.with_suffix(".cover.png")
+    render_cover_png(video_path, spec, crop_w, crop_h, crop_y0, src_w, cover_png)
+
+    body_dur = float(ffprobe_meta(body_mp4)["format"]["duration"])
+    delay_ms = int(COVER_DUR * 1000)
+    fc = (
+        f"[0:v]tpad=start_duration={COVER_DUR}:start_mode=clone[main];"
+        f"[1:v]setsar=1,fade=out:st={COVER_DUR - COVER_FADE}:d={COVER_FADE}:alpha=1[cover];"
+        f"[main][cover]overlay=0:0:enable='lt(t,{COVER_DUR})'[vout];"
+        f"[0:a]adelay={delay_ms}:all=1[speech];"
+        f"anoisesrc=d={COVER_DUR + 0.25}:color=pink:amplitude=0.28,"
+        f"highpass=f=180,lowpass=f=3500,"
+        f"afade=t=in:st=0:d=0.15,afade=t=out:st={COVER_DUR - 0.45:.2f}:d=0.7,"
+        f"aformat=sample_rates=44100:channel_layouts=stereo[bgm];"
+        f"[speech][bgm]amix=inputs=2:duration=first:normalize=0[aout]"
+    )
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(body_mp4),
+        "-loop",
+        "1",
+        "-t",
+        str(COVER_DUR),
+        "-i",
+        str(cover_png),
+        "-filter_complex",
+        fc,
+        "-map",
+        "[vout]",
+        "-map",
+        "[aout]",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "22",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-r",
+        "30",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(output),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    cover_png.unlink(missing_ok=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"cover intro ffmpeg failed:\n{result.stderr[-3000:]}")
+
+    assert_video_meta(
+        output,
+        expected_dur=body_dur + COVER_DUR,
+        size_mb_per_90s=size_mb_per_90s,
+    )
+    log.info(
+        "fullscreen.cover_intro_rendered",
+        output=str(output),
+        dur=round(body_dur + COVER_DUR, 2),
+        size_mb=round(output.stat().st_size / 1024 / 1024, 1),
+    )
+
+
 def render_fullscreen(
     video_path: Path,
     spec: FramingSpec,
@@ -277,6 +374,8 @@ def render_fullscreen(
     output: Path,
 ) -> None:
     """풀스크린 9:16 렌더 — 커버 1.5초 freeze + 본편. 완료 후 메타 검증."""
+    if not spec.cuts:
+        raise ValueError("cuts 없는 spec은 커버 전용 — render_cover_intro를 사용하세요.")
     dur = end_sec - start_sec
     src_w, src_h = probe_dimensions(video_path)
     scale = src_h / 1080
@@ -381,6 +480,7 @@ __all__ = [
     "build_crop_expr",
     "load_framing_spec",
     "merge_sub_chunks",
+    "render_cover_intro",
     "render_fullscreen",
     "split_cover_line",
 ]

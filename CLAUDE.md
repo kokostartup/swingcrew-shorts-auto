@@ -148,8 +148,14 @@ cron에서 제거** (영빈 결정 2026-05-13): 영빈이 어떤 미드폼을 �
      d. `scripts/render_fullscreen.py --internal-id <id>` — 렌더 + status='generated' +
         노션 '생성'. 렌더 후 **컷 경계 프레임 추출 검수 필수**.
      ※ `process_approved`는 ko P시리즈를 자동 skip (cron legacy 포맷 렌더 방지 가드).
-   - **B시리즈 → 기존 그대로**: `process_approved(skip_publish_meta=True)` — 검정 밴드
-     카피 + blur padding, 커버 없음 (영빈 결정: B는 기존 포맷 유지).
+   - **B시리즈 → 기존 본편 + 커버 카드** (영빈 결정 2026-07-13):
+     a. `process_approved(skip_publish_meta=True)` — 검정 밴드 카피 + blur padding
+        본편 렌더 (기존 그대로, 영상 안 글자 유지)
+     b. 커버 전용 spec 작성 — `data/framing/<internal_id>.json`에 hero_t/hero_cx/
+        cover_lines만 (cuts 생략). B 지오메트리: crop_y0=95, crop_h=880 (상단
+        배너 + 하단 자막 회피). 히어로 프레임은 직접 추출·확인 후 결정.
+     c. `scripts/render_fullscreen.py --internal-id <id>` — cuts 없는 spec을
+        감지해 본편 앞에 커버 1.5초만 얹음 (`render_cover_intro`).
 3. SQLite에서 `status='generated' AND publish_meta_json IS NULL` 모먼트들 fetch
 4. **`golf-publish-meta-writer` 에이전트 병렬 호출** — 모먼트당 title/desc/tags/hashtags
 5. SQLite UPDATE `publish_meta_json` + `notion_update(page_id, 'generated', title=..., description=...)`

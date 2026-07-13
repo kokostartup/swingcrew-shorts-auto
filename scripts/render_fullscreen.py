@@ -1,7 +1,12 @@
-"""P시리즈 풀스크린 9:16 렌더 CLI — framing spec 기반 (Claude Code 세션 전용).
+"""풀스크린/커버 렌더 CLI — framing spec 기반 (Claude Code 세션 전용).
+
+spec의 cuts 유무로 분기:
+  - cuts 있음 (P시리즈): 소스에서 풀스크린 9:16 렌더
+  - cuts 없음 (B시리즈): process_approved가 만든 legacy 본편 앞에 커버 카드만
+    얹음 (영빈 결정 2026-07-13 — B도 썸네일은 P와 동일, 본편 포맷은 유지)
 
 전제: golf-framing-director + golf-subtitle-editor 에이전트 출력이
-data/framing/<internal_id>.json 으로 저장돼 있어야 함.
+data/framing/<internal_id>.json 으로 저장돼 있어야 함 (B는 hero/cover_lines만).
 
 렌더 후 process_approved와 동일하게 SQLite status='generated' + generated_path
 업데이트, 노션 '생성' 전환. publish_meta는 건드리지 않음 (메인이
@@ -21,7 +26,11 @@ import click
 
 from app.config import settings
 from app.integrations.notion import update_status as notion_update
-from app.pipeline.fullscreen import load_framing_spec, render_fullscreen
+from app.pipeline.fullscreen import (
+    load_framing_spec,
+    render_cover_intro,
+    render_fullscreen,
+)
 from app.storage.db import get_connection
 from app.utils.logger import get_logger
 
@@ -70,13 +79,25 @@ def main(internal_ids: tuple[str, ...], skip_db: bool) -> None:
 
             spec = load_framing_spec(iid)
             output = settings.shorts_output_dir / f"{iid}.mp4"
-            render_fullscreen(
-                video_path,
-                spec,
-                row["start_time"],
-                row["end_time"],
-                output,
-            )
+            if spec.cuts:
+                # P시리즈: 풀스크린 렌더 (소스에서 직접)
+                render_fullscreen(
+                    video_path,
+                    spec,
+                    row["start_time"],
+                    row["end_time"],
+                    output,
+                )
+            else:
+                # B시리즈: legacy 본편(process_approved 산출물) 앞에 커버만 얹음
+                body = Path(row["generated_path"]) if row["generated_path"] else output
+                if not body.exists():
+                    click.echo(f"SKIP {iid}: 본편 mp4 없음 ({body}) — process_approved 먼저")
+                    failed += 1
+                    continue
+                tmp = output.with_suffix(".covered.mp4")
+                render_cover_intro(video_path, spec, body, tmp)
+                tmp.replace(output)
             click.echo(f"OK {iid}: {output} ({output.stat().st_size / 1e6:.1f} MB)")
 
             if skip_db:

@@ -107,8 +107,20 @@ class TestFramingSpec:
         assert spec.crop_h == 966  # 기본값 (1080p 기준 하단 자막 띠 회피)
         assert spec.cuts[1].end is None
 
-    def test_rejects_empty_cuts(self):
-        with pytest.raises(ValueError):
-            FramingSpec.model_validate(
-                {"cuts": [], "hero_t": 0, "hero_cx": 0.5, "cover_lines": ["a"]}
-            )
+    def test_empty_cuts_is_cover_only_spec(self):
+        """cuts 없는 spec = B시리즈 커버 전용 (본편은 legacy 렌더 유지)."""
+        spec = FramingSpec.model_validate(
+            {"hero_t": 345.8, "hero_cx": 0.42, "cover_lines": ["임팩트 0.04초가"]}
+        )
+        assert spec.cuts == []
+
+    def test_render_fullscreen_rejects_cover_only_spec(self, tmp_path):
+        from pathlib import Path
+
+        from app.pipeline.fullscreen import render_fullscreen
+
+        spec = FramingSpec.model_validate(
+            {"hero_t": 0, "hero_cx": 0.5, "cover_lines": ["a"]}
+        )
+        with pytest.raises(ValueError, match="커버 전용"):
+            render_fullscreen(Path("x.mp4"), spec, 0, 10, tmp_path / "o.mp4")

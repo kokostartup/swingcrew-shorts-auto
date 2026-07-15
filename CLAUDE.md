@@ -109,8 +109,9 @@ cron에서 제거** (영빈 결정 2026-05-13): 영빈이 어떤 미드폼을 �
 3. **Scheduled At 자동 할당** — `status='generated'` + `scheduled_at IS NULL`인 행에
    다음 빈 슬롯 할당. 슬롯: 매일 KST 11/20시, 단 화/금은 20시 제외 — 미드폼
    업로드(화/금 20시)와 알림 경쟁 시 조회수 중앙값 45% 하락 (2026-07-13 분석,
-   주 12슬롯 = 미드폼 주 2개 × 모먼트 5~8개 수급에 맞춤). 최소 24h 검토 lead 보장
-   (`MIN_LEAD_HOURS=24`). 노션 Scheduled At 컬럼도 동시 업데이트.
+   주 12슬롯 = 미드폼 주 2개 × 모먼트 5~8개 수급에 맞춤). **항상 가장 빠른 빈
+   슬롯부터** — 24h 검토 lead 폐기 (영빈 결정 2026-07-15, `MIN_LEAD_HOURS_KO=1`은
+   YouTube publishAt 미래 보장 버퍼일 뿐). 노션 Scheduled At 컬럼도 동시 업데이트.
 4. **YouTube 예약 게시** — Scheduled At 있는 `status='generated'` 모먼트 → R2 업로드(ko만) +
    YouTube private + publishAt 예약 → `status='scheduled'`. FB/IG/Threads/TikTok은
    슬롯 시각 cron에서 자동 게시 (아래 "슬롯 게시 흐름" 참고). 영빈 수동 작업 없음.

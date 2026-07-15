@@ -32,9 +32,10 @@ MIDFORM_CLASH_HOUR_KO = 20
 _CHANNEL_TZ: dict[str, ZoneInfo | timezone] = {"ko": KST, "en": LA}
 _CHANNEL_SLOTS: dict[str, list[int]] = {"ko": SLOT_HOURS_KST, "en": SLOT_HOURS_LA}
 
-# 영빈 검토 시간 보장: ffmpeg 완료 후 최소 N시간 미래 슬롯에만 예약.
-# 영어 채널은 자동 흐름이라 검토 시간 불필요 → 0시간으로.
-MIN_LEAD_HOURS_KO = 24
+# 24h 검토 lead 폐기 (영빈 결정 2026-07-15) — 항상 가장 빠른 빈 슬롯부터 할당.
+# 1h는 검토용이 아니라 YouTube publishAt 미래 보장 버퍼 (슬롯 직전 업로드 시
+# publishAt이 과거가 되어 API 실패하는 것 방지).
+MIN_LEAD_HOURS_KO = 1
 MIN_LEAD_HOURS_EN = 0
 
 
@@ -61,8 +62,7 @@ def _candidate_slots(
 ) -> list[datetime]:
     """channel별 다음 빈 슬롯 후보 (시간순). MIN_LEAD_HOURS 이후.
 
-    min_lead_hours: None이면 channel default (ko=24, en=0). 명시하면 override.
-        Claude Code 세션에서 영빈이 manual 처리 시 영빈 검토 lead 불필요 → 0~1로 호출 가능.
+    min_lead_hours: None이면 channel default (ko=1, en=0). 명시하면 override.
     """
     tz = _tz_for(channel)
     slot_hours = _slot_hours_for(channel)
@@ -126,8 +126,7 @@ def assign_scheduled_at_for_pending(
 
     channel: 'ko' 또는 'en'. ko는 KST 4슬롯, en은 LA 2슬롯.
     pending_short_ids: 특정 행만 처리. None이면 모든 적격 행.
-    min_lead_hours: None이면 channel default (ko=24, en=0). Claude Code 세션에서 영빈이
-        manual 처리 시 검토 lead 불필요 → 0~1로 호출 (즉 슬롯이 1시간 이상 미래면 OK).
+    min_lead_hours: None이면 channel default (ko=1, en=0). 명시하면 override.
     반환: 할당된 모먼트 수.
     """
     candidates = _candidate_slots(channel, min_lead_hours=min_lead_hours)

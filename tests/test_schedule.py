@@ -32,3 +32,15 @@ def test_ko_weekly_slot_count_is_12():
 def test_en_slots_unchanged():
     slots = _candidate_slots("en", max_lookahead_days=7, min_lead_hours=0)
     assert {s.hour for s in slots} == {7, 20}
+
+
+def test_ko_default_lead_gives_earliest_slot():
+    """24h 검토 lead 폐기 (2026-07-15) — 기본 호출도 다음 빈 슬롯부터.
+
+    ko 슬롯은 최악의 경우에도 24h 안에 하나는 있으므로 (화 11시 직후 → 수 11시),
+    기본 lead가 1h면 첫 슬롯은 항상 now+24h 이내. 예전 기본값 24h면 실패.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    slots = _candidate_slots("ko", max_lookahead_days=3)
+    assert slots[0] - datetime.now(UTC).astimezone(slots[0].tzinfo) < timedelta(hours=24)

@@ -30,7 +30,10 @@ SUB_HOLD_MAX = 1.0  # 다음 자막까지 유지 상한 (sec)
 COVER_TEXT_MAX_W = 940
 COVER_TEXT_MAX_SIZE = 130
 COVER_MARGIN_L = 70
-COVER_BLOCK_BOTTOM = 1920 - 300  # 그리드 조회수 오버레이 회피
+# 인스타/틱톡 프로필 그리드는 9:16을 3:4로 중앙 크롭 → 영상 y 240~1680만 표시되고,
+# 조회수 오버레이가 셀 하단 ~12% = 영상 y 약 1490~1680을 가림 (2026-07-16 홈피드 실측).
+# 카피 블록 하단은 그 위에 있어야 함. 이전 값 1620은 오버레이 존 안이라 겹쳤음.
+COVER_BLOCK_BOTTOM = 1440
 LOGO_PATH = Path(__file__).parents[1] / "assets" / "swingcrew_logo.png"
 # 4K 소스 + 야외 잔디/숲은 crf22 기준 비트레이트가 높음 — legacy 30MB/90s 대신 완화.
 FULLSCREEN_SIZE_MB_PER_90S = 130.0

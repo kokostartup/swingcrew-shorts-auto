@@ -6,9 +6,12 @@ cron 4번/일 (07/11/17/20 KST). 영빈 PC 무관. SQLite 의존성 X.
   1. 노션 list_pages_by_status('scheduled')
   2. scheduled_at이 현재 시각 ±15분 안인 모먼트만 처리
   3. R2 URL 구성: {R2_PUBLIC_URL}/{Internal ID}.mp4
+     — HEAD pre-flight: 파일 404면 게시 skip + 노션 '오류' + Preview에 재업로드 안내
   4. 메타: 노션 Title + Description
   5. FB + IG + Threads 게시 (social.py) + TikTok 게시 (Buffer shareNow)
   6. 노션 status='게시'로 전환 + Preview URL 업데이트
+     — 전 platform 실패 시 status 유지 + Preview에 ⚠️ 실패 사유 기록
+  7. platform 실패가 1건이라도 있으면 exit 1 → GitHub 워크플로우 실패 알림
 
 TikTok 처리 (2026-06-22 변경): Buffer customScheduled 예약 한도 10개 제한 회피 →
 publish_ready 단계에서 Buffer 호출 안 함. 대신 슬롯 시각에 여기서 Buffer shareNow
@@ -23,6 +26,8 @@ import os
 import sys
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
+
+import httpx
 
 from app.config import settings
 from app.integrations import buffer as buffer_api
@@ -52,6 +57,7 @@ log = get_logger(__name__)
 
 KST = timezone(timedelta(hours=9))
 SLOT_TOLERANCE_MIN = 15  # 현재 시각 ±15분 모먼트 처리.
+R2_DELETE_AFTER_DAYS = 3  # 게시된 mp4도 슬롯 시각 후 이 기간은 R2 보존 (오삭제 방어).
 
 # workflow_dispatch에서 SKIP_TIME_FILTER=1 환경변수로 시간 필터 무시 (backlog 일괄 처리용).
 SKIP_TIME_FILTER = os.environ.get("SKIP_TIME_FILTER", "").lower() in {"1", "true", "yes"}
@@ -96,6 +102,37 @@ def _within_slot(scheduled_at_iso: str) -> bool:
     return diff_min <= SLOT_TOLERANCE_MIN
 
 
+def _r2_file_missing(url: str) -> bool:
+    """R2 public URL HEAD — 404면 True.
+
+    네트워크 오류 등 404 외 응답은 False (게시 시도 진행 — pre-flight가
+    일시 장애로 게시를 막으면 안 됨).
+    """
+    try:
+        resp = httpx.head(url, timeout=10)
+    except Exception:
+        return False
+    return resp.status_code == 404
+
+
+def _write_failure_note(page: dict[str, Any], note: str, *, to_error: bool = False) -> None:
+    """게시 실패 사유를 노션 Preview 칸에 기록 (영빈 UI = 노션).
+
+    to_error=True면 status를 '오류'로 전환하되, 이미 'scheduled'가 아닌 페이지
+    (catch-up 대상 'published' 등)는 status를 건드리지 않고 노트만 남김.
+    """
+    cur_status = page.get("status") or "scheduled"
+    new_status = "error" if to_error and cur_status == "scheduled" else cur_status
+    try:
+        notion_update(page["id"], new_status, preview_url=note[:300])
+    except Exception as e:
+        log.warning(
+            "publish_socials.notion_update_failed",
+            page_id=page["id"],
+            error=str(e),
+        )
+
+
 def _build_post_text(title: str | None, description: str | None) -> str:
     """게시 본문 — description (또는 title fallback)."""
     if description:
@@ -119,6 +156,14 @@ def _publish_one_moment(page: dict[str, Any]) -> tuple[bool, dict[str, str]]:
         return False, {}
 
     r2_url = f"{settings.r2_public_url.rstrip('/')}/{iid}.mp4"
+    if _r2_file_missing(r2_url):
+        log.warning("publish_socials.r2_file_missing", iid=iid, url=r2_url)
+        _write_failure_note(
+            page,
+            f"⚠️ R2에 {iid}.mp4 없음 — PC에서 r2_reupload.py 실행 후 Status를 예약으로",
+            to_error=True,
+        )
+        return False, {"r2": "error:R2 파일 없음 — 재업로드 필요"}
     text = _build_post_text(title, description)
     if not text:
         log.warning("publish_socials.no_text", iid=iid)
@@ -177,19 +222,22 @@ def _publish_one_moment(page: dict[str, Any]) -> tuple[bool, dict[str, str]]:
 
     # 시도된 platform 중 1개라도 성공이면 status='게시'로 전환.
     success = any(not v.startswith("error:") for v in results.values())
+    if not success and results:
+        errs = "; ".join(f"{p}: {v.removeprefix('error:')[:60]}" for p, v in results.items())
+        _write_failure_note(page, f"⚠️ 게시 실패 — {errs}")
     return success, results
 
 
 def _cleanup_previous_slot_r2(scheduled_pages: list[dict[str, Any]]) -> None:
-    """노션 status='게시'로 확인된 iid의 mp4만 R2에서 삭제 (delete-list 방식).
+    """노션 status='게시' + 슬롯 시각 3일 경과한 iid의 mp4만 R2에서 삭제.
 
-    ★ 이전 keep-list 방식("scheduled 제외 전부 삭제")은 노션 조회가 일시적으로
-    빈 결과를 주면 버킷 전체를 삭제했고 (2026-07-15 P030 11개, 2026-08-07 P033
-    11개 유실 사고), 미리 올려둔 미래 클립(아직 scheduled 아님)도 삭제했다
-    (2026-08-11 P034 4개). delete-list는 조회 실패/빈 결과 시 "아무것도 안 지움"
-    쪽으로 실패한다. scheduled인 iid는 이중 안전장치로 삭제 제외.
-    게시 직후가 아니라 다음 슬롯 실행 때 지우는 건 동일 — TikTok 등 platform
-    실패 시 재시도 window 확보 (다음 슬롯까지).
+    ★ delete-list 방식: 이전 keep-list 방식("scheduled 제외 전부 삭제")은 노션
+    조회가 일시적으로 빈 결과를 주면 버킷 전체를 삭제했고 (2026-07-15 P030
+    11개, 2026-08-07 P033 11개 유실 사고), 미리 올려둔 미래 클립(아직 scheduled
+    아님)도 삭제했다 (2026-08-11 P034 4개). delete-list는 조회 실패/빈 결과 시
+    "아무것도 안 지움" 쪽으로 실패한다. scheduled인 iid는 이중 안전장치로 제외.
+    ★ 나이 가드: scheduled_at + R2_DELETE_AFTER_DAYS 지나야 삭제 — 어떤 로직
+    버그가 나도 최근 파일은 물리적으로 못 지움 (저장비는 클립당 ~25MB로 미미).
     TARGET_INTERNAL_IDS 지정 시(수동 catch-up) skip. DRY_RUN 시에도 skip —
     로컬 검증에서 실제 R2 삭제되면 안 됨.
     """
@@ -200,10 +248,24 @@ def _cleanup_previous_slot_r2(scheduled_pages: list[dict[str, Any]]) -> None:
     except Exception as e:
         log.warning("publish_socials.r2_cleanup_query_failed", error=str(e))
         return
-    published_iids = {iid for p in published_pages if (iid := p.get("internal_id"))}
+    now = datetime.now(UTC)
+    published_iids: set[str] = set()
+    for p in published_pages:
+        iid = p.get("internal_id")
+        sched_str = p.get("scheduled_at")
+        if not iid or not sched_str:
+            continue
+        try:
+            sched = datetime.fromisoformat(sched_str)
+        except ValueError:
+            continue
+        if sched.tzinfo is None:
+            sched = sched.replace(tzinfo=KST)
+        if now - sched >= timedelta(days=R2_DELETE_AFTER_DAYS):
+            published_iids.add(iid)
     scheduled_iids = {iid for p in scheduled_pages if (iid := p.get("internal_id"))}
     if not published_iids:
-        print("R2 cleanup: no published iids — skip", flush=True)
+        print("R2 cleanup: no deletable published iids — skip", flush=True)
         return
     try:
         keys = r2.list_object_keys()
@@ -249,6 +311,7 @@ def main() -> None:
 
     processed = 0
     success = 0
+    platform_errors = 0
     for page in pages:
         sched = page.get("scheduled_at")
         if not sched:
@@ -269,6 +332,7 @@ def main() -> None:
             success += 1
             continue
         ok, urls = _publish_one_moment(page)
+        platform_errors += sum(1 for u in urls.values() if u.startswith("error:"))
         if ok:
             success += 1
             ok_platforms = [p for p, u in urls.items() if u and not u.startswith("error:")]
@@ -297,6 +361,10 @@ def main() -> None:
             print(f"  {platform}: {url[:60]}", flush=True)
 
     print(f"\n=== done — processed={processed} success={success} ===", flush=True)
+    if platform_errors:
+        # exit 1 → GitHub 워크플로우 실패 처리 → repo 소유자에게 실패 메일 자동 발송.
+        print(f"⚠️ platform 게시 실패 {platform_errors}건 — exit 1", flush=True)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

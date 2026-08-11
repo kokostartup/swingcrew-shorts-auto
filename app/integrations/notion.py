@@ -256,9 +256,12 @@ def list_pages_by_status(status_en: str, channel: str = "ko") -> list[dict[str, 
                 t.get("plain_text") or "" for t in hook_title_rt
             ).strip()
             copy1, copy2 = _split_hook(hook_text)
+            iid_rt = props.get("Internal ID", {}).get("rich_text") or []
+            internal_id = "".join(t.get("plain_text") or "" for t in iid_rt).strip()
             out.append(
                 {
                     "id": str(p["id"]),
+                    "internal_id": internal_id or None,
                     "status": status_en,
                     "scheduled_at": sched.get("start") if sched else None,
                     "scene_type": scene_sel.get("name") if scene_sel else None,

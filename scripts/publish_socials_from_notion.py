@@ -181,19 +181,30 @@ def _publish_one_moment(page: dict[str, Any]) -> tuple[bool, dict[str, str]]:
 
 
 def _cleanup_previous_slot_r2(scheduled_pages: list[dict[str, Any]]) -> None:
-    """status='scheduled'인 iid mp4는 전부 keep, R2의 나머지 mp4 삭제.
+    """노션 status='게시'로 확인된 iid의 mp4만 R2에서 삭제 (delete-list 방식).
 
-    이전 슬롯 mp4(=게시 끝나 status가 '게시'로 넘어간 것)를 다음 슬롯 실행 때
-    정리하는 방식. TikTok 등 platform 실패 시 재시도 window 확보 (다음 슬롯까지).
-    ★ keep 기준은 반드시 "아직 scheduled인 전체" — 이번 슬롯 처리분만 keep하면
-    미래 슬롯용으로 미리 올려둔 mp4까지 삭제됨 (2026-07-15 P030 11개 유실 사고).
-    TARGET_INTERNAL_IDS 지정 시(수동 catch-up) 정리 skip — 이미 '게시'된 페이지도
-    대상에 섞여 있어 keep 계산이 왜곡됨.
-    DRY_RUN 시에도 skip — 로컬 검증에서 실제 R2 삭제되면 안 됨.
+    ★ 이전 keep-list 방식("scheduled 제외 전부 삭제")은 노션 조회가 일시적으로
+    빈 결과를 주면 버킷 전체를 삭제했고 (2026-07-15 P030 11개, 2026-08-07 P033
+    11개 유실 사고), 미리 올려둔 미래 클립(아직 scheduled 아님)도 삭제했다
+    (2026-08-11 P034 4개). delete-list는 조회 실패/빈 결과 시 "아무것도 안 지움"
+    쪽으로 실패한다. scheduled인 iid는 이중 안전장치로 삭제 제외.
+    게시 직후가 아니라 다음 슬롯 실행 때 지우는 건 동일 — TikTok 등 platform
+    실패 시 재시도 window 확보 (다음 슬롯까지).
+    TARGET_INTERNAL_IDS 지정 시(수동 catch-up) skip. DRY_RUN 시에도 skip —
+    로컬 검증에서 실제 R2 삭제되면 안 됨.
     """
     if TARGET_INTERNAL_IDS or DRY_RUN:
         return
-    keep_iids: set[str] = {iid for p in scheduled_pages if (iid := _internal_id_from_page(p["id"]))}
+    try:
+        published_pages = list_pages_by_status("published")
+    except Exception as e:
+        log.warning("publish_socials.r2_cleanup_query_failed", error=str(e))
+        return
+    published_iids = {iid for p in published_pages if (iid := p.get("internal_id"))}
+    scheduled_iids = {iid for p in scheduled_pages if (iid := p.get("internal_id"))}
+    if not published_iids:
+        print("R2 cleanup: no published iids — skip", flush=True)
+        return
     try:
         keys = r2.list_object_keys()
     except Exception as e:
@@ -204,7 +215,7 @@ def _cleanup_previous_slot_r2(scheduled_pages: list[dict[str, Any]]) -> None:
         if not key.endswith(".mp4"):
             continue
         iid = key[:-4]
-        if iid in keep_iids:
+        if iid not in published_iids or iid in scheduled_iids:
             continue
         try:
             r2.delete_object(key)
@@ -215,10 +226,7 @@ def _cleanup_previous_slot_r2(scheduled_pages: list[dict[str, Any]]) -> None:
                 key=key,
                 error=str(e),
             )
-    print(
-        f"R2 cleanup: deleted {deleted} prev-slot mp4 (kept {len(keep_iids)})",
-        flush=True,
-    )
+    print(f"R2 cleanup: deleted {deleted} published mp4", flush=True)
 
 
 def main() -> None:
@@ -236,7 +244,7 @@ def main() -> None:
         pages.extend(list_pages_by_status("published"))
     print(f"candidate pages from Notion: {len(pages)}", flush=True)
 
-    # 게시 끝난 이전 슬롯 mp4 정리 — 아직 scheduled인 페이지(미래 슬롯 포함)는 전부 keep.
+    # '게시' 확인된 이전 슬롯 mp4만 정리 — scheduled/미래 클립은 건드리지 않음.
     _cleanup_previous_slot_r2(pages)
 
     processed = 0

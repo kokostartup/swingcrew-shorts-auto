@@ -34,6 +34,12 @@ COVER_MARGIN_L = 70
 # 조회수 오버레이가 셀 하단 ~12% = 영상 y 약 1490~1680을 가림 (2026-07-16 홈피드 실측).
 # 카피 블록 하단은 그 위에 있어야 함. 이전 값 1620은 오버레이 존 안이라 겹쳤음.
 COVER_BLOCK_BOTTOM = 1440
+# 로고 락업 고정 y (영빈 결정 2026-08-13 — 카피 블록에 상대 배치하면 줄 수/크기에
+# 따라 로고가 영상마다 움직임). 2줄·최대 크기 카피 기준 위치로 고정, 카피가 더
+# 길면 로고 대신 fontsize가 줄어듦 (아래 fit 루프의 높이 조건).
+COVER_LOGO_Y = 990
+COVER_LOGO_H = 88
+COVER_LOGO_GAP = 44  # 로고 하단 ↔ 카피 블록 상단 최소 여백
 LOGO_PATH = Path(__file__).parents[1] / "assets" / "swingcrew_logo.png"
 # 4K 소스 + 야외 잔디/숲은 crf22 기준 비트레이트가 높음 — legacy 30MB/90s 대신 완화.
 FULLSCREEN_SIZE_MB_PER_90S = 130.0
@@ -245,21 +251,25 @@ def render_cover_png(
     def fit(text: str, size: int) -> float:
         return ImageFont.truetype(str(settings.font_path), size).getlength(text)
 
+    # 카피 존 높이 = 고정 로고 하단(+여백) ~ 고정 하단선. 폭 초과 또는 존 높이
+    # 초과 시 fontsize 축소 → 로고/하단선은 모든 커버에서 동일 위치 유지.
+    text_zone_h = COVER_BLOCK_BOTTOM - (COVER_LOGO_Y + COVER_LOGO_H + COVER_LOGO_GAP)
     size = COVER_TEXT_MAX_SIZE
-    while size > 60 and any(fit(t, size) > COVER_TEXT_MAX_W for t in spec.cover_lines):
+    while size > 60 and (
+        any(fit(t, size) > COVER_TEXT_MAX_W for t in spec.cover_lines)
+        or int(size * 1.22) * len(spec.cover_lines) > text_zone_h
+    ):
         size -= 2
     font = ImageFont.truetype(str(settings.font_path), size)
     line_h = int(size * 1.22)
     block_top = COVER_BLOCK_BOTTOM - line_h * len(spec.cover_lines)
 
-    logo_h = 88
-    logo = _logo_white_lineart(logo_h)
-    logo_y = block_top - logo_h - 44
-    img.alpha_composite(logo, (COVER_MARGIN_L, logo_y))
+    logo = _logo_white_lineart(COVER_LOGO_H)
+    img.alpha_composite(logo, (COVER_MARGIN_L, COVER_LOGO_Y))
     draw = ImageDraw.Draw(img)
     wm_font = ImageFont.truetype(str(settings.font_path), 46)
     draw.text(
-        (COVER_MARGIN_L + logo.width + 24, logo_y + logo_h / 2),
+        (COVER_MARGIN_L + logo.width + 24, COVER_LOGO_Y + COVER_LOGO_H / 2),
         "스윙크루",
         font=wm_font,
         fill=(255, 255, 255, 235),

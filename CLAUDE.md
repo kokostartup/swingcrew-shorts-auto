@@ -237,6 +237,9 @@ $env:TARGET_INTERNAL_IDS = "26-P002-S04"  # 콤마 구분 여러 개 가능
   80초 cap은 2026-05-21 calibration 분석: 게시 7일+ 26개 sample에서 80초 초과 시
   평균 views 절반 이하로 급락 (~3,820 vs ~8,300) → analyze prompt + MagicMoment
   validator 모두 80s로 강화.
+- **B 시리즈는 최대 58초** (`B_MAX_MOMENT_SEC`, 목표 45~55초) — 커버 카드 1.5초
+  포함 최종 영상 60초 이하 강제 (영빈 결정 2026-08-13). Gemini 프롬프트 재정의 +
+  `_drop_overlong_b_moments` 하드 필터 + researcher 에이전트 룰 3중 적용.
 
 ### Gemini start_sec 보정 (analyze.py `_snap_start_sec`)
 Gemini가 transcript의 `[start-end]` 라벨에서 `end`값을 다음 hook 시작으로 잡는

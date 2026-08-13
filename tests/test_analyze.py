@@ -169,3 +169,28 @@ def test_load_cached_analysis_none(
         "app.config.settings.analyses_dir", tmp_path / "missing",
     )
     assert load_cached_analysis("nonexistent") is None
+
+
+# ----- B 시리즈 1분 제한 (영빈 결정 2026-08-13) -----
+
+
+def test_is_b_series() -> None:
+    from app.pipeline.analyze import _is_b_series
+
+    assert _is_b_series("26-B014")
+    assert _is_b_series("26-B014-S03")
+    assert not _is_b_series("26-P030")
+    assert not _is_b_series(None)
+
+
+def test_drop_overlong_b_moments() -> None:
+    from app.pipeline.analyze import B_MAX_MOMENT_SEC, _drop_overlong_b_moments
+
+    def _m(dur: float) -> MagicMoment:
+        return MagicMoment(
+            start_sec=100.0, end_sec=100.0 + dur, hook_text="h",
+            copy1="c1", copy2="c2", score=8.0, reasoning="r",
+        )
+
+    kept = _drop_overlong_b_moments([_m(55.0), _m(70.0), _m(B_MAX_MOMENT_SEC)])
+    assert [m.end_sec - m.start_sec for m in kept] == [55.0, B_MAX_MOMENT_SEC]

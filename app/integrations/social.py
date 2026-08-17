@@ -36,9 +36,26 @@ THREADS_GRAPH = "https://graph.threads.net/v1.0"
 CONTAINER_POLL_INTERVAL_SEC = 5
 CONTAINER_POLL_MAX_ATTEMPTS = 60  # 최대 5분 대기
 
+# 스레드 컨테이너 error_message 중 재시도로 풀리는 값.
+# `UNKNOWN`은 스레드가 실패를 분류하지 못한 서버 측 일시 오류 — 같은 mp4가 다음
+# 시도에 정상 처리된다 (2026-08-17 26-B016-S05: FB/IG는 동일 R2 URL로 성공,
+# 스레드만 11초 만에 UNKNOWN. 같은 인코딩의 S02는 이틀 전 스레드 게시 성공).
+# 나머지(INVALID_*, FILE_TOO_LARGE 등)는 스펙 위반이라 재시도해도 결과가 같다.
+# 새로 관측되는 일시 오류가 있으면 여기에만 추가할 것 — 기본은 재시도 안 함.
+THREADS_RETRYABLE_CONTAINER_ERRORS = frozenset({"UNKNOWN"})
+THREADS_CONTAINER_MAX_TRIES = 3
+THREADS_RETRY_BACKOFF_SEC = 30
+
 
 class SocialPostError(RuntimeError):
     """게시 실패."""
+
+
+class _ThreadsContainerRetryableError(SocialPostError):
+    """스레드 컨테이너 일시 실패 — 컨테이너를 새로 만들면 풀린다.
+
+    ERROR 상태 컨테이너는 되살릴 수 없어서 재시도는 반드시 재생성이어야 한다.
+    """
 
 
 def _post(url: str, data: dict[str, Any], timeout: float = 180.0) -> dict[str, Any]:
@@ -172,7 +189,11 @@ def _wait_for_threads_container(creation_id: str) -> None:
         if status == "FINISHED":
             return
         if status == "ERROR":
-            raise SocialPostError(f"Threads container ERROR: {data.get('error_message')}")
+            reason = str(data.get("error_message"))
+            msg = f"Threads container ERROR: {reason}"
+            if reason in THREADS_RETRYABLE_CONTAINER_ERRORS:
+                raise _ThreadsContainerRetryableError(msg)
+            raise SocialPostError(msg)
     raise SocialPostError("Threads container polling timeout (5분)")
 
 
@@ -180,27 +201,41 @@ def post_threads_video(video_url: str, text: str) -> str:
     """Threads 영상 게시 (2-step). `me` endpoint 사용 (token user 자동 식별).
 
     1. POST /me/threads (media_type=VIDEO, video_url, text)
-    2. polling status FINISHED
+    2. polling status FINISHED — 일시 오류면 1로 돌아가 컨테이너 재생성
     3. POST /me/threads_publish (creation_id)
     Returns: Threads media ID
     """
     if not settings.threads_access_token:
         raise SocialPostError("THREADS_ACCESS_TOKEN 미설정")
 
-    container = _post(
-        f"{THREADS_GRAPH}/me/threads",
-        {
-            "media_type": "VIDEO",
-            "video_url": video_url,
-            "text": text[:500],  # Threads 본문 한도
-            "access_token": settings.threads_access_token,
-        },
-    )
-    creation_id = str(container["id"])
-    log.info("social.threads_container_created", creation_id=creation_id)
+    for attempt in range(1, THREADS_CONTAINER_MAX_TRIES + 1):
+        container = _post(
+            f"{THREADS_GRAPH}/me/threads",
+            {
+                "media_type": "VIDEO",
+                "video_url": video_url,
+                "text": text[:500],  # Threads 본문 한도
+                "access_token": settings.threads_access_token,
+            },
+        )
+        creation_id = str(container["id"])
+        log.info("social.threads_container_created", creation_id=creation_id, attempt=attempt)
 
-    _wait_for_threads_container(creation_id)
+        try:
+            _wait_for_threads_container(creation_id)
+            break
+        except _ThreadsContainerRetryableError as e:
+            if attempt == THREADS_CONTAINER_MAX_TRIES:
+                raise SocialPostError(f"{e} — 컨테이너 {attempt}회 재생성 모두 실패") from e
+            log.warning(
+                "social.threads_container_retry",
+                creation_id=creation_id,
+                attempt=attempt,
+                error=str(e),
+            )
+            time.sleep(THREADS_RETRY_BACKOFF_SEC)
 
+    # publish는 재시도하지 않는다 — 스레드가 게시한 뒤 응답만 유실되면 중복 게시된다.
     published = _post(
         f"{THREADS_GRAPH}/me/threads_publish",
         {

@@ -124,12 +124,10 @@ def get_channels_by_service() -> dict[str, str]:
     return mapping
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(min=2, max=20),
-    retry=retry_if_exception_type(BufferError),
-    reraise=True,
-)
+# 재시도는 `_graphql`의 3회가 전부 — 여기 데코레이터를 다시 달면 3×3=9회 POST가 된다.
+# 504 같은 gateway timeout은 Buffer 백엔드가 이미 post를 만들었을 수도 있어서,
+# 시도 횟수가 곧 틱톡 중복 게시 위험이다 (2026-08-15 26-B016-S02 504 때는 다행히
+# 생성 0건이었지만 n=1). 늘리지 말 것.
 def create_video_post(
     *,
     channel_id: str,
